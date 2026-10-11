@@ -65,10 +65,10 @@ Changing `RP_ID` later invalidates every existing passkey.
 
 | | Upstream (`docker compose`) | Railway (`railway/`) |
 |---|---|---|
-| Services | `web` + `api` + `media` | one container: nginx + API |
+| Services | `web` + `api` | one container: nginx + API |
 | nginx config | `web/nginx.conf.template` | the same template, rendered with a `127.0.0.1:3000` backend |
 | Listen port | `NGINX_PORT` (80) | Railway's `$PORT` |
-| Exercise media | ~140 MB downloaded into a volume | jsDelivr CDN, pinned to the dataset commit `build:mobile` uses |
+| Exercise media | baked into the `web` image (`catalogue/media/`) | baked into the image the same way |
 | AI runtime | `default` or `coach` target | `default` (no Agent SDK / Codex; HTTP providers still work) |
 
 nginx template variables get their defaults from the `ENV` lines of `web/Dockerfile`, so a

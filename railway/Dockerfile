@@ -4,9 +4,9 @@
 # in railway/ so merging upstream releases into this fork never touches it.
 #
 # Railway deploys individual services, not docker-compose. Upstream splits into `web`
-# (nginx) + `api` (node) + a one-shot `media` downloader. Passkeys (WebAuthn) require the
-# app and its API to share ONE origin, so both run here in a single container: nginx serves
-# the SPA on Railway's $PORT and proxies /api to node on 127.0.0.1:3000.
+# (nginx) + `api` (node). Passkeys (WebAuthn) require the app and its API to share ONE
+# origin, so both run here in a single container: nginx serves the SPA on Railway's $PORT
+# and proxies /api to node on 127.0.0.1:3000.
 
 # --- Frontend (mirrors web/Dockerfile) ----------------------------------------------------
 # --platform=$BUILDPLATFORM: Vite output is arch-independent, and QEMU-emulated npm installs
@@ -20,13 +20,7 @@ COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --ignore-scripts
 COPY api/coach/core/ /app/api/coach/core/
 COPY frontend/ ./
-# Exercise media is served from jsDelivr instead of a ~140 MB volume, pinned to the dataset
-# commit the mobile build (build:mobile) uses.
-RUN sha="$(grep -oE 'exercises-dataset@[0-9a-f]{40}' package.json | head -n 1 | cut -d@ -f2)" \
- && sha="${sha:-7455efae41b330c265e7cd4b78dfa848e7ce5ebd}" \
- && VITE_IMG_BASE="https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset@${sha}/images/" \
-    VITE_GIF_BASE="https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset@${sha}/videos/" \
-    npm run build \
+RUN npm run build \
  && echo "v$(node -p 'require("./package.json").version')" > /tmp/version
 
 # --- nginx template defaults --------------------------------------------------------------
@@ -52,6 +46,9 @@ RUN apk upgrade --no-cache && apk add --no-cache nginx gettext
 RUN adduser -D -H -s /sbin/nologin coach
 
 COPY --from=build /app/frontend/dist /usr/share/nginx/html
+# Exercise stills and animations ship inside the image, as in web/Dockerfile (see
+# catalogue/media/NOTICE.md). The frontend requests them under /exercise-media/.
+COPY catalogue/media/ /usr/share/nginx/html/exercise-media/
 COPY --from=build /tmp/version /.version
 COPY --from=api /app/api /app/api
 COPY --from=nginx-defaults /nginx-defaults.env /etc/nginx/nginx-defaults.env
