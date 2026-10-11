@@ -72,6 +72,16 @@ describe('starter plan chooser', () => {
     expect(useUI.getState().toastMsg).toBe('Upper / Lower loaded')
   })
 
+  it('loading the same plan twice reuses its routines instead of duplicating them', () => {
+    expect(loadStarterPlan('upper-lower')).toBe(true)
+    const ids = S().routines.map(r => r.id)
+    const week = structuredClone(S().week)
+    expect(loadStarterPlan('upper-lower')).toBe(true)
+    expect(S().routines.map(r => r.id)).toEqual(ids)
+    expect(S().routines.filter(r => r.name === 'Upper A')).toHaveLength(1)
+    expect(S().week).toEqual(week)
+  })
+
   it('asks first when a weekday the plan wants is already taken', () => {
     useStore.setState(s => ({ S: { ...s.S, week: { 3: ['mine'] } } }))
     choose('Full Body')
@@ -107,15 +117,71 @@ describe('starter plan chooser', () => {
   })
 })
 
+describe('starter plan chooser, fitted to equipment', () => {
+  const home = { id: 'home', name: 'Home', equipment: ['dumbbell'] }
+  const chip = (host, label) => [...host.querySelectorAll('.chip')].find(b => b.textContent === label)
+  const exIds = () => S().routines.slice(1).flatMap(r => r.ex.map(e => e.id))
+
+  it('points to Settings when there is no profile, and offers no chips', () => {
+    starterPlanSheet()
+    const host = renderTop()
+    expect(host.querySelector('.chip')).toBeNull()
+    expect(host.textContent).toContain('Add an equipment profile in Settings')
+  })
+
+  it('loads the plan as written unless a profile is picked', () => {
+    useStore.setState(s => ({ S: { ...s.S, equipProfiles: [home], activeEquipId: 'home', equipFilterOn: false } }))
+    starterPlanSheet()
+    const host = renderTop()
+    expect(chip(host, 'As written').className).toContain('on')
+    act(() => { rowFor(host, 'Push / Pull / Legs').click() })
+    expect(exIds()).toContain('0025')   // the barbell bench press
+  })
+
+  it('starts on the profile the library is filtered by, and fits the plan to it', () => {
+    useStore.setState(s => ({ S: { ...s.S, equipProfiles: [home], activeEquipId: 'home', equipFilterOn: true } }))
+    starterPlanSheet()
+    const host = renderTop()
+    expect(chip(host, 'Home').className).toContain('on')
+    act(() => { rowFor(host, 'Push / Pull / Legs').click() })
+    expect(exIds()).not.toContain('0025')
+    expect(useUI.getState().toastMsg).toMatch(/^Push \/ Pull \/ Legs loaded, fitted to "Home": \d+ swapped, 0 dropped$/)
+  })
+
+  it('lets you pick a profile by hand', () => {
+    useStore.setState(s => ({ S: { ...s.S, equipProfiles: [home], activeEquipId: '', equipFilterOn: false } }))
+    starterPlanSheet()
+    const host = renderTop()
+    act(() => { chip(host, 'Home').click() })
+    act(() => { rowFor(host, '5×5').click() })
+    expect(exIds()).not.toContain('0043')   // no barbell squat on a dumbbell-only profile
+  })
+
+  it('adds a fitted plan beside a same-named routine with other exercises, instead of reusing it', () => {
+    loadStarterPlan('ppl')
+    loadStarterPlan('ppl', { id: 'home', name: 'Home', equipment: ['dumbbell'] })
+    const pushes = S().routines.filter(r => r.name === 'Push Day')
+    expect(pushes).toHaveLength(2)
+    expect(pushes[0].ex.map(e => e.id)).not.toEqual(pushes[1].ex.map(e => e.id))
+    expect(S().week[1]).toEqual([pushes[1].id])
+  })
+
+  it('still reuses the routines when the same fitted plan is loaded twice', () => {
+    const home = { id: 'home', name: 'Home', equipment: ['dumbbell'] }
+    loadStarterPlan('ppl', home)
+    loadStarterPlan('ppl', home)
+    expect(S().routines.filter(r => r.name === 'Push Day')).toHaveLength(1)
+  })
+})
+
 describe('loadStarterPlan', () => {
-  it('appends independent routines each time the same plan is loaded', () => {
+  it('two different plans add independent routines', () => {
     loadStarterPlan('ppl')
     const first = S().routines.slice(1).map(r => r.id)
-    loadStarterPlan('ppl')
+    loadStarterPlan('full-body')
     const second = S().routines.slice(4).map(r => r.id)
     expect(S().routines).toHaveLength(7)
     expect(new Set([...first, ...second]).size).toBe(6)
-    expect(second.some(id => first.includes(id))).toBe(false)
   })
 
   it('refuses a plan it does not know and changes nothing', () => {

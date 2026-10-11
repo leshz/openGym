@@ -10,14 +10,14 @@ import { computeCohort } from './cohort.js';
 import { adapterFor } from './adapters/index.js';
 import { canDropPrivileges } from './adapters/spawn.js';
 import { DATA_CATEGORIES } from './core/payload.js';
-import { validateBaseUrl, baseUrlFor } from './core/providers.js';
+import { validateBaseUrl, validateHeaders, baseUrlFor } from './core/providers.js';
 
 // Job failures the user sees, in the app's own voice. The raw provider detail never reaches
 // them — it goes to the admin card, which is where someone can act on it (FR-47).
 const USER_ERROR = {
   off: 'the Coach is not set up on this instance',
   busy: 'the Coach is already thinking about your training',
-  cap: 'the Coach is resting — try again tomorrow',
+  cap: 'the Coach is taking a rest day, try again tomorrow',
   consent: 'the Coach needs your go-ahead first',
   // Verbatim, because it tells the user the one thing that resolves it and names who resolves
   // it. A vaguer message here turns into a support question for the person running the box.
@@ -27,11 +27,13 @@ const USER_ERROR = {
 const HTTP_FOR = { off: 503, busy: 409, cap: 429, consent: 403, shared: 409, unprivileged: 503 };
 
 export function coachRoutes({ json, readBody, readSession, requireAdmin }) {
-  /** Every user route starts the same way: signed in, feature on, feature reachable. */
+  /** Every user route starts the same way: signed in, feature on, feature reachable. The class
+   *  goes beside the words, as enqueue's refusal sends it: the app shows its own translated line
+   *  for the class, and these English words only where it has none. */
   const guard = (req, res) => {
     const user = readSession(req);
     if (!user) { json(res, 401, { error: 'not signed in' }); return null; }
-    if (!cfgStore.isEnabled() || !cfgStore.isConnected()) { json(res, 503, { error: USER_ERROR.off }); return null; }
+    if (!cfgStore.isEnabled() || !cfgStore.isConnected()) { json(res, 503, { error: USER_ERROR.off, code: 'off' }); return null; }
     return user;
   };
   const failEnqueue = (res, e) => {
@@ -163,9 +165,14 @@ export function coachRoutes({ json, readBody, readSession, requireAdmin }) {
         model: cfgStore.modelFor(cfg),
         models: cfg.models,
         baseUrl: cfgStore.providerMeta(cfg).http ? baseUrlFor(cfg.provider, cfg) : null,
+        // Extra static headers this endpoint is called with (compatible endpoints only).
+        // Values, not just names: the admin wrote them and needs to see them to edit them.
+        // Plaintext next to baseUrl — routing aids, not credentials (the key stays encrypted).
+        headers: cfgStore.providerMeta(cfg).http ? (cfgStore.optionsFor(cfg).headers || null) : null,
         knownModels: check.models || null,
         caps: cfg.caps,
         maxMessageLen: cfg.maxMessageLen,
+        maxOutputTokens: cfg.maxOutputTokens,
         community: !!cfg.community,
         runtime: { ok: !!check.ok, version: check.version || null, error: check.error || null, needsKey: !!check.needsKey },
         authMode: cfg.authMode,
@@ -225,6 +232,15 @@ export function coachRoutes({ json, readBody, readSession, requireAdmin }) {
         if (!v.value && !cfgStore.PROVIDERS[target].defaultBase) return json(res, 400, { error: `${target} has no default endpoint, enter one` });
         patch.providerOptions = { ...current.providerOptions, [target]: { ...(current.providerOptions[target] || {}), baseUrl: v.value } };
       }
+      if (body.headers !== undefined) {
+        if (!cfgStore.PROVIDERS[target].baseUrl) return json(res, 400, { error: `${target} has a fixed endpoint` });
+        const h = validateHeaders(body.headers);
+        if (!h.ok) return json(res, 400, { error: h.error });
+        // Build on the patch, not on current: a body carrying baseUrl AND headers must keep both.
+        const next = { ...((patch.providerOptions && patch.providerOptions[target]) || current.providerOptions[target] || {}) };
+        if (h.value) next.headers = h.value; else delete next.headers;
+        patch.providerOptions = { ...current.providerOptions, ...(patch.providerOptions || {}), [target]: next };
+      }
       if (body.community !== undefined) patch.community = !!body.community;
       if (body.caps) {
         patch.caps = {
@@ -236,6 +252,12 @@ export function coachRoutes({ json, readBody, readSession, requireAdmin }) {
         patch.maxMessageLen = Math.max(
           cfgStore.MAX_MESSAGE_LEN_FLOOR,
           Math.min(cfgStore.MAX_MESSAGE_LEN_CEILING, +body.maxMessageLen || current.maxMessageLen)
+        );
+      }
+      if (body.maxOutputTokens !== undefined) {
+        patch.maxOutputTokens = Math.max(
+          cfgStore.MAX_OUTPUT_TOKENS_FLOOR,
+          Math.min(cfgStore.MAX_OUTPUT_TOKENS_CEILING, +body.maxOutputTokens || current.maxOutputTokens)
         );
       }
       cfgStore.save(patch);

@@ -112,7 +112,9 @@ test('the library is filtered to the equipment someone actually has', () => {
   const eqOf = id => (payload.LIBRARY.find(e => e.id === id) || {}).eq;
   const dumbbell = payload.librarySlice({}, ['dumbbell']);
   assert.ok(dumbbell.length > 0);
-  assert.ok(dumbbell.every(e => eqOf(e.id) === 'dumbbell'), 'nothing outside the filter');
+  // Body weight is never gated, the same rule as the app's own equipment profiles.
+  assert.ok(dumbbell.every(e => ['dumbbell', 'body weight'].includes(eqOf(e.id))), 'nothing outside the filter');
+  assert.ok(dumbbell.some(e => eqOf(e.id) === 'body weight'), 'push-ups and pull-ups stay on the table');
   assert.ok(dumbbell.every(e => e.eq === undefined && e.id && e.n && e.bp), 'entries are slim');
   assert.ok(payload.librarySlice({}, ['dumbbell', 'barbell']).some(e => eqOf(e.id) === 'barbell'));
   // Custom exercises always travel: they exist nowhere else and the model cannot guess them.
@@ -227,6 +229,19 @@ test('a debrief payload carries one session, its predecessors of the same routin
   assert.equal('window' in p, false);
   assert.ok(p.aggregates && Array.isArray(p.aggregates.exercises));
   assert.ok(p.bodyweight.series.every(b => b.d <= '2026-07-20'));
+});
+
+test('a set taken to failure reaches the coach as failure, a warm-up never does', () => {
+  const S = debriefState();
+  const w2 = S.workouts.find(w => w.id === 'w2');
+  w2.entries[0].sets[0].failure = true;
+  w2.entries[0].sets[2].failure = true;
+  const p = payload.build(S, { handle: handleFor('u'), kind: 'debrief', workoutId: 'w2' });
+  const sets = p.session.entries[0].sets;
+  assert.equal(sets[0].warmup, true);
+  assert.equal('failure' in sets[0], false);
+  assert.equal('failure' in sets[1], false);
+  assert.equal(sets[2].failure, true);
 });
 
 test('an unknown workout id falls back to the latest session', () => {
@@ -374,4 +389,42 @@ test('a workout\'s photos and videos never reach the payload', () => {
       assert.ok(!json.includes(leak), `${kind} payload leaked ${leak}`);
     }
   }
+});
+
+/* The session note is the athlete's own explanation of the numbers, and the app lets it run to
+   NOTE_MAX (500) characters. It was cut at 300 here, so a note explaining how a dumbbell weight
+   had been counted reached the model mid-sentence. */
+test('a session note reaches the model whole, bounded only at the app\'s own cap', () => {
+  const S = sampleState();
+  const whole = 'It is confusing whether the weight is total or per dumbbell. '.repeat(8).trim();   // 487 chars: past the old 300, within the cap
+  const mk = (d, note) => ({
+    id: 'w' + d, d, name: 'A', start: 0, end: 60000, prs: [], note,
+    entries: [{ id: '0001', target: { sets: 3, reps: 10, weight: 20 }, sets: [{ w: 20, r: 10, done: true }] }]
+  });
+  S.workouts = [mk('2026-09-02', whole), mk('2026-09-03', 'y'.repeat(payload.NOTE_MAX + 100))];   // only a document edited outside the app carries the second
+  const p = payload.build(S, { handle: handleFor('u1'), kind: 'review' });
+  const [full, edited] = p.window.workouts;
+  assert.equal(full.compact, undefined, 'both sessions are in full detail');
+  assert.equal(full.note, whole, 'the session note arrives whole (was cut at 300)');
+  assert.equal(edited.note.length, payload.NOTE_MAX, 'a note no app could have written is bounded at the cap');
+});
+
+test('the app\'s active equipment profile stands in when the Coach was told no equipment', () => {
+  const eqOf = id => (payload.LIBRARY.find(e => e.id === id) || {}).eq;
+  const S = sampleState();
+  S.coach = { ...(S.coach || {}), profile: { goal: 'muscle', daysPerWeek: 3, equipment: [] } };
+  S.equipProfiles = [{ id: 'home', name: 'Home gym', equipment: ['dumbbell', 'cable'] }];
+  S.activeEquipId = 'home';
+  S.equipFilterOn = true;
+  const p = payload.build(S, { handle: handleFor('u1'), kind: 'create' });
+  assert.deepEqual(p.coachProfile.equipment, ['dumbbell', 'cable']);
+  const trained = new Set((S.workouts || []).flatMap(w => (w.entries || []).map(en => en.id)));
+  assert.ok(!p.library.some(e => eqOf(e.id) === 'leverage machine' && !trained.has(e.id)), 'no leverage machine offered');
+  // Filtering switched off in the app: the Coach goes back to the whole catalogue.
+  S.equipFilterOn = false;
+  assert.deepEqual(payload.build(S, { handle: handleFor('u1'), kind: 'create' }).coachProfile.equipment, []);
+  // Equipment answered in the Coach's own questions wins over the app's profile.
+  S.equipFilterOn = true;
+  S.coach.profile.equipment = ['barbell'];
+  assert.deepEqual(payload.build(S, { handle: handleFor('u1'), kind: 'create' }).coachProfile.equipment, ['barbell']);
 });

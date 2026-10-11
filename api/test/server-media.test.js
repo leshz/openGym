@@ -287,7 +287,7 @@ test('the hourly budget answers 429 with Retry-After, and is recorded once', asy
     assert.equal(r.status, 429);
     const retry = +r.headers.get('retry-after');
     assert.ok(retry > 3000 && retry <= 3600, `retry-after ${retry}`);
-    assert.deepEqual(await r.json(), { error: 'too many uploads — try again later', code: 'locked', retryAfter: retry });
+    assert.deepEqual(await r.json(), { error: 'too many uploads, try again later', code: 'locked', retryAfter: retry });
   }
   assert.equal((await h.put(M.jpeg(), { uid: U2 })).status, 201, 'per profile, not per instance');
   const audit = fs.readFileSync(path.join(h.dataDir, 'audit.log'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
@@ -305,7 +305,7 @@ test('a third upload while two are in flight is refused as busy', async t => {
   const r = await h.put(M.jpeg());
   assert.equal(r.status, 429);
   assert.equal(r.headers.get('retry-after'), '5');
-  assert.deepEqual(await r.json(), { error: 'too many uploads at once — try again in a moment', code: 'busy', retryAfter: 5 });
+  assert.deepEqual(await r.json(), { error: 'too many uploads at once, try again in a moment', code: 'busy', retryAfter: 5 });
   a.req.destroy(); b.req.destroy();
   await sleep(150);
   assert.equal((await h.put(M.jpeg())).status, 201, 'the slots come back when the two go away');
@@ -385,6 +385,9 @@ test('PUT /api/data still answers 200 when the media bookkeeping fails', async t
   const r = await h.pushState(refState());
   assert.equal(r.status, 200);
   assert.equal((await r.json()).ok, true);
+  // The line goes to stderr before the reply, but the test hears the two on separate pipes: on a
+  // busy machine the reply can be read first.
+  for (let i = 0; i < 100 && !/media noteState/.test(h.log); i++) await new Promise(res => setTimeout(res, 20));
   assert.match(h.log, /media noteState/);
   const saved = JSON.parse(fs.readFileSync(path.join(h.dataDir, `state-${U1}.json`), 'utf8'));
   assert.equal(saved._rev, 1, 'the state itself was saved');

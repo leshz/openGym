@@ -11,7 +11,7 @@ to support it anyway, there's [Buy Me a Coffee](https://buymeacoffee.com/duartes
 
 No, there are three ways to use it:
 
-- **Try it:** the [online demo](https://opengym.duarte-santos.ch/demo/) runs entirely in your
+- **Try it:** the [online demo](https://opengym.ch/demo/) runs entirely in your
   browser with example data.
 - **Phone only:** the Android app needs no server and no account; everything stays on the phone.
   See [MOBILE.md](MOBILE.md).
@@ -36,12 +36,12 @@ checks for updates itself. Get it from the
 On a self-hosted instance, in the `./data` folder next to `docker-compose.yml`: one JSON file per
 profile plus the account list. Back up that folder and you've backed up everything. In the phone app
 it's in the app's private storage. In guest mode it's only in that browser. You can export
-everything as one file at any time under **Settings → Data**.
+everything as one file at any time under **Settings → Data & backup**.
 
 ### Does the app send anything anywhere?
 
-Your instance has no telemetry and phones home to nobody. On first start it downloads the exercise
-images and animations from the upstream dataset, once. The AI coach, if an admin turns it on, sends
+Your instance has no telemetry and phones home to nobody. The exercise pictures and animations ship
+inside the web image, so not even those are downloaded. The AI coach, if an admin turns it on, sends
 the training data it needs to the provider you configured; [AI_COACH.md](AI_COACH.md) lists exactly
 what. Push notifications go through your browser's push service, as all web push does.
 
@@ -86,6 +86,12 @@ invite-only and give yourself an admin dashboard; see
 `git pull && docker compose pull && docker compose up -d`. Your data is untouched. See
 [updating](SELF_HOSTING.md#8-updating).
 
+Then update the app on every device that syncs. A phone still on v1.3.9 or older keeps syncing,
+and the server looks after what that phone doesn't know about, but it can't always tell what the
+phone has seen. One case it gets wrong on purpose: if the old phone sets something back to exactly
+what it was before, after another device changed it, the other device's change wins. Once every
+device is updated, nobody has to guess.
+
 ### I'm moving from another app. Can I bring my history?
 
 FitNotes, Strong and Hevy work out of the box, Apple Health for body weight, and any CSV with a date,
@@ -93,9 +99,10 @@ an exercise and something measured. See [DATA_IMPORTS.md](DATA_IMPORTS.md).
 
 ### Can I reuse the exercise images in my own project?
 
-Not on openGym's say-so. The images and animations aren't covered by openGym's license and their
-ownership is disputed; openGym only downloads them for your instance. Details in
-[NOTICE.md](../NOTICE.md).
+No. They are © Aliaksandr Makatserchyk, Gym visual, licensed for use in openGym only and not covered
+by openGym's license. Anything outside openGym needs your own licence from
+[gymvisual.com](https://gymvisual.com/). Details in [NOTICE.md](../NOTICE.md). The exercise text in
+[catalogue/](../catalogue/README.md) is a different story: that's openGym's, and fixes are welcome.
 
 ### Where do I ask something that isn't here?
 

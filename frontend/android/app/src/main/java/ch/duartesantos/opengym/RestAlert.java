@@ -10,12 +10,16 @@ import android.content.res.ColorStateList;
 import android.content.Intent;
 import android.widget.RemoteViews;
 import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.os.Build;
 import android.os.PowerManager;
+import android.os.VibrationAttributes;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.util.Log;
 
 /**
@@ -41,7 +45,9 @@ public final class RestAlert {
     static final String QUIET_CHANNEL_ID = "rest-over-quiet";
     private static String lastAlertTitle = "Rest over";
     private static boolean lastSound = true;
+    private static String lastTone = "chime";
     private static boolean lastVibrate = true;
+    private static boolean lastAlarmBuzz = false;
     private static String lastChannel = CHANNEL_ID;
     private static String labPause = "Pause";
     private static String labResume = "Resume";
@@ -54,7 +60,7 @@ public final class RestAlert {
     static final int NOTIFICATION_ID = 42;
     static final String COUNTDOWN_CHANNEL_ID = "rest-countdown";
     private static final int FLAGS = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
-    private static final int RATE = 22050;
+    private static final int RATE = RestTone.RATE;
     private static final long[] VIBRATE = new long[] {0, 200, 100, 200, 100, 400};
 
     private static AudioTrack current;
@@ -62,15 +68,23 @@ public final class RestAlert {
 
     private RestAlert() {}
 
-    public static void schedule(Context ctx, long at, int id, String title, boolean sound, boolean vibrate,
-                                String channelId, String visibility, String importance, boolean localOnly,
-                                String countdownTitle, long totalMs) {
+    /**
+     * `alarmBuzz` is Settings → "Vibrate when the phone is on silent" (#375): the end buzzes as an
+     * alarm, which silent mode lets through, and the notification goes out on the quiet channel so
+     * a phone with its ringer on does not buzz twice.
+     */
+    public static void schedule(Context ctx, long at, int id, String title, boolean sound, String tone, boolean vibrate,
+                                boolean alarmBuzz, String channelId, String visibility, String importance,
+                                boolean localOnly, String countdownTitle, long totalMs) {
+        alarmBuzz = vibrate && alarmBuzz;
         channelId = channelFor(channelId, vibrate);
         Intent intent = alarmIntent(ctx);
         intent.putExtra("id", id);
         intent.putExtra("title", title == null ? "" : title);
         intent.putExtra("sound", sound);
+        intent.putExtra("tone", tone == null ? "chime" : tone);
         intent.putExtra("vibrate", vibrate);
+        intent.putExtra("alarmBuzz", alarmBuzz);
         intent.putExtra("channelId", channelId);
         intent.putExtra("visibility", visibility == null ? "public" : visibility);
         intent.putExtra("importance", importance == null ? "high" : importance);
@@ -89,11 +103,14 @@ public final class RestAlert {
         if (!exact) Log.w("openGym", "exact alarms not allowed; the rest countdown sounds the end itself");
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
-            ensureChannel(ctx, nm, channelId, importanceOf(importance), visibilityOf(visibility), vibrate);
+            String posted = alarmBuzz ? QUIET_CHANNEL_ID : channelId;
+            ensureChannel(ctx, nm, posted, importanceOf(importance), visibilityOf(visibility), !alarmBuzz && vibrate);
         }
         lastAlertTitle = title == null ? "Rest over" : title;
         lastSound = sound;
+        lastTone = tone == null ? "chime" : tone;
         lastVibrate = vibrate;
+        lastAlarmBuzz = alarmBuzz;
         lastChannel = channelId;
         startCountdown(ctx, at, totalMs, countdownTitle);
     }
@@ -133,7 +150,9 @@ public final class RestAlert {
         intent.putExtra("id", NOTIFICATION_ID);
         intent.putExtra("title", lastAlertTitle);
         intent.putExtra("sound", lastSound);
+        intent.putExtra("tone", lastTone);
         intent.putExtra("vibrate", lastVibrate);
+        intent.putExtra("alarmBuzz", lastAlarmBuzz);
         intent.putExtra("channelId", lastChannel);
         intent.putExtra("at", at);
         new Thread(() -> fire(ctx, intent), "opengym-rest").start();
@@ -166,15 +185,23 @@ public final class RestAlert {
             }
             pokeScreen(ctx);
             boolean vibrate = intent.getBooleanExtra("vibrate", true);
-            boolean shown = showNotification(ctx, intent);
+            boolean alarmBuzz = vibrate && intent.getBooleanExtra("alarmBuzz", false);
+            boolean shown = showNotification(ctx, intent, alarmBuzz);
+            // On silent the channel's buzz is muted; an alarm's is not (#375). The notification
+            // went out on the quiet channel, so this is the one buzz with the ringer on too.
+            if (alarmBuzz) buzz(ctx, VIBRATE);
             // Settings → Vibrate off is off here too: without notifications this buzz is the alert.
-            if (!shown && vibrate) vibrateFallback(ctx);
-            // The countdown card is the foreground-service notification. Drop it once the
-            // "rest over" alert is up, including when the WebView is frozen.
-            stopCountdown(ctx);
-            // Locked or in the background, the page cannot play its chime, so this is the one.
+            else if (!shown && vibrate) vibrateFallback(ctx);
+            // Locked or in the background, the page does not play its chime, so this is the one:
+            // the same sound as Settings → Sound picks for the page (RestTone.render).
             boolean play = intent.getBooleanExtra("sound", true);
-            if (play) playSound(ctx);
+            if (play) playSound(ctx, toneOf(intent));
+            // The countdown card is the foreground-service notification. Drop it once the
+            // "rest over" alert is up and the tone has played, including when the WebView is
+            // frozen. Not before the tone: the service is what keeps this process in the
+            // foreground, and a process that has just dropped out of it can be frozen or cut
+            // off mid-tone with the screen off.
+            stopCountdown(ctx);
         } finally {
             if (cpu != null && cpu.isHeld()) cpu.release();
         }
@@ -205,10 +232,11 @@ public final class RestAlert {
     }
 
     @SuppressWarnings("deprecation")
-    private static boolean showNotification(Context ctx, Intent intent) {
+    private static boolean showNotification(Context ctx, Intent intent, boolean alarmBuzz) {
         String title = intent.getStringExtra("title");
-        if (title == null || title.isEmpty()) title = "Rest over — next set!";
-        boolean vibrate = intent.getBooleanExtra("vibrate", true);
+        if (title == null || title.isEmpty()) title = "Rest’s over. Next set!";
+        // With the alarm buzz on, the notification itself stays still: the buzz comes from buzz().
+        boolean vibrate = intent.getBooleanExtra("vibrate", true) && !alarmBuzz;
         String channelId = channelFor(intent.getStringExtra("channelId"), vibrate);
         int id = intent.getIntExtra("id", NOTIFICATION_ID);
         boolean localOnly = intent.getBooleanExtra("localOnly", false);
@@ -298,6 +326,36 @@ public final class RestAlert {
         } catch (Exception ignored) { /* */ }
     }
 
+    /**
+     * A buzz silent mode lets through (#375): vibration with the alarm usage, which the system
+     * plays in silent and vibrate-only modes like the clock app's alarm. `pattern` is Android's
+     * waveform (off, on, off, on…). Do Not Disturb still decides, as it does for alarms.
+     */
+    @SuppressWarnings("deprecation")
+    static void buzz(Context ctx, long[] pattern) {
+        try {
+            Vibrator vibrator;
+            if (Build.VERSION.SDK_INT >= 31) {
+                VibratorManager vm = (VibratorManager) ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                vibrator = vm == null ? null : vm.getDefaultVibrator();
+            } else {
+                vibrator = (Vibrator) ctx.getSystemService(Context.VIBRATOR_SERVICE);
+            }
+            if (vibrator == null || !vibrator.hasVibrator()) return;
+            if (Build.VERSION.SDK_INT >= 33) {
+                vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1),
+                        VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM));
+                return;
+            }
+            AudioAttributes alarm = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build();
+            if (Build.VERSION.SDK_INT >= 26) vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1), alarm);
+            else vibrator.vibrate(pattern, -1, alarm);
+        } catch (Exception ignored) { /* nothing else to fall back on here */ }
+    }
+
     static void updateAlarm(Context ctx, long at) {
         if (at <= System.currentTimeMillis()) {
             cancelAlarmOnly(ctx, NOTIFICATION_ID);
@@ -307,7 +365,9 @@ public final class RestAlert {
         intent.putExtra("id", NOTIFICATION_ID);
         intent.putExtra("title", lastAlertTitle);
         intent.putExtra("sound", lastSound);
+        intent.putExtra("tone", lastTone);
         intent.putExtra("vibrate", lastVibrate);
+        intent.putExtra("alarmBuzz", lastAlarmBuzz);
         intent.putExtra("channelId", lastChannel);
         intent.putExtra("visibility", "public");
         intent.putExtra("importance", "high");
@@ -454,12 +514,46 @@ public final class RestAlert {
         nm.createNotificationChannel(channel);
     }
 
-    private static void playSound(Context ctx) {
-        playClip(ctx, renderBeeps());
+    /**
+     * The end tone with the app on screen. The page's Web Audio cannot turn other apps down, so
+     * over music it was lost (Discord: "the bell doesn't ring while I have music on"); played
+     * here it ducks the music like the screen-off alarm does. Off the main thread: playClip
+     * waits until the clip has been heard.
+     */
+    static void playNow(Context ctx, String tone) {
+        new Thread(() -> playSound(ctx, tone), "opengym-tone").start();
     }
 
+    private static void playSound(Context ctx, String tone) {
+        playClip(ctx, RestTone.render(tone));
+    }
+
+    /**
+     * The sound an alarm asks for: its "tone" (#306), or for an alarm armed by the app before it,
+     * still pending across the update, its "classic" switch.
+     */
+    private static String toneOf(Intent intent) {
+        String tone = intent.getStringExtra("tone");
+        if (tone != null) return tone;
+        return intent.getBooleanExtra("classic", false) ? "classic" : "chime";
+    }
+
+    /**
+     * Plays a whole clip and returns once it has been heard. Over music the clip asks for a
+     * short duck, as a navigation prompt does: the music app turns itself down for the tone
+     * and back up after it. A web page cannot do that, which is half of why the chime got lost
+     * under music (Discord: "Rest Timer Sound Notification too Quiet").
+     *
+     * The track used to be let go a fixed 60 ms after the clip's length. With the screen off the
+     * output wakes from standby and runs through a low-power buffer first, and Bluetooth adds its
+     * own delay, so the last, longest note was cut off or the whole tone never reached the
+     * speaker. Now the track is held until the mixer has taken every sample (the clip ends in
+     * RestTone.TAIL_SEC of silence for what sits behind the mixer), with a cap.
+     */
     private static void playClip(Context ctx, short[] samples) {
         AudioTrack track = null;
+        AudioManager am = null;
+        Object focus = null;
         try {
             int bytes = samples.length * 2;
             int min = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
@@ -469,36 +563,102 @@ public final class RestAlert {
                 samples = padded;
                 bytes = samples.length * 2;
             }
-            track = new AudioTrack.Builder()
-                    .setAudioAttributes(new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build())
-                    .setAudioFormat(new AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(RATE)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .build())
-                    .setBufferSizeInBytes(bytes)
-                    .setTransferMode(AudioTrack.MODE_STATIC)
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build();
-            if (track.getState() != AudioTrack.STATE_INITIALIZED) return;
-            track.write(samples, 0, samples.length);
+            track = buildTrack(attrs, bytes, AudioTrack.MODE_STATIC);
+            // A static track holds the whole clip, the surest way to have it all heard. Some audio
+            // stacks refuse one (the Android emulator does, and so do some phones in some output
+            // modes) and the tone was then silently skipped: stream the same clip instead.
+            boolean streaming = false;
+            if (track.getState() != AudioTrack.STATE_INITIALIZED) {
+                Log.w("openGym", "rest tone: static track refused, streaming it");
+                track.release();
+                track = buildTrack(attrs, Math.max(min * 2, 8192), AudioTrack.MODE_STREAM);
+                streaming = true;
+            }
+            // Each way out says why in logcat: a rest tone that never plays is otherwise silent twice.
+            if (track.getState() != AudioTrack.STATE_INITIALIZED) { Log.w("openGym", "rest tone: track not initialized"); return; }
+            int frames = samples.length;
+            if (!streaming) {
+                frames = track.write(samples, 0, samples.length);
+                if (frames <= 0) { Log.w("openGym", "rest tone: write returned " + frames); return; }
+            }
             track.setVolume(1f);
+            am = (AudioManager) ctx.getSystemService(Context.AUDIO_SERVICE);
+            focus = duck(am, attrs);
             stopCurrent();
             current = track;
             track.play();
-            Thread.sleep((samples.length * 1000L / RATE) + 60);
+            // A streaming track is fed after play(); write() blocks until the mixer has room.
+            if (streaming) {
+                int written = track.write(samples, 0, samples.length);
+                if (written <= 0) { Log.w("openGym", "rest tone: stream write returned " + written); return; }
+            }
+            long clipMs = frames * 1000L / RATE;
+            long deadline = System.currentTimeMillis() + clipMs + 3000;
+            while (System.currentTimeMillis() < deadline
+                    && track.getPlayState() == AudioTrack.PLAYSTATE_PLAYING
+                    && track.getPlaybackHeadPosition() < frames) {
+                Thread.sleep(25);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } catch (Exception ignored) { /* the notification still posted */ }
+        } catch (Exception e) {
+            Log.w("openGym", "rest tone failed", e);   // the notification still posted
+        }
         finally {
             if (track != null) {
-                try { track.pause(); } catch (Exception ignored) { /* */ }
+                try { track.stop(); } catch (Exception ignored) { /* */ }
                 try { track.release(); } catch (Exception ignored) { /* */ }
                 if (current == track) current = null;
             }
+            unduck(am, focus);
         }
+    }
+
+    private static AudioTrack buildTrack(AudioAttributes attrs, int bytes, int mode) {
+        return new AudioTrack.Builder()
+                .setAudioAttributes(attrs)
+                .setAudioFormat(new AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(RATE)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build())
+                .setBufferSizeInBytes(bytes)
+                .setTransferMode(mode)
+                .build();
+    }
+
+    /** Asks other apps to turn down for the tone. Returns what unduck needs, or null. */
+    @SuppressWarnings("deprecation")
+    private static Object duck(AudioManager am, AudioAttributes attrs) {
+        if (am == null) return null;
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                AudioFocusRequest req = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                        .setAudioAttributes(attrs)
+                        .setOnAudioFocusChangeListener(change -> { /* a tone this short just plays on */ })
+                        .build();
+                am.requestAudioFocus(req);
+                return req;
+            }
+            AudioManager.OnAudioFocusChangeListener listener = change -> { /* */ };
+            am.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
+            return listener;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static void unduck(AudioManager am, Object focus) {
+        if (am == null || focus == null) return;
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && focus instanceof AudioFocusRequest) am.abandonAudioFocusRequest((AudioFocusRequest) focus);
+            else if (focus instanceof AudioManager.OnAudioFocusChangeListener) am.abandonAudioFocus((AudioManager.OnAudioFocusChangeListener) focus);
+        } catch (Exception ignored) { /* the duck ends with the process anyway */ }
     }
 
     private static synchronized void stopCurrent() {
@@ -506,30 +666,5 @@ public final class RestAlert {
         try { current.pause(); } catch (Exception ignored) { /* */ }
         try { current.release(); } catch (Exception ignored) { /* */ }
         current = null;
-    }
-
-    /** Same three tones the in-page beep uses (880, 880, 1320), at full scale. */
-    static short[] renderBeeps() {
-        int[] freq = {880, 880, 1320};
-        double[] dur = {0.15, 0.15, 0.40};
-        double[] gap = {0.10, 0.10, 0};
-        int total = 0;
-        for (int i = 0; i < freq.length; i++) total += (int) (RATE * (dur[i] + gap[i]));
-        short[] out = new short[total];
-        int pos = 0;
-        for (int i = 0; i < freq.length; i++) {
-            int n = (int) (RATE * dur[i]);
-            int g = (int) (RATE * gap[i]);
-            int fade = Math.max(1, RATE / 200);
-            for (int s = 0; s < n; s++) {
-                double env = 1;
-                if (s < fade) env = s / (double) fade;
-                else if (s > n - fade) env = (n - s) / (double) fade;
-                double wave = Math.sin(2 * Math.PI * freq[i] * s / RATE);
-                out[pos++] = (short) Math.max(-32767, Math.min(32767, wave * env * 0.85 * 32767));
-            }
-            pos += g;
-        }
-        return out;
     }
 }

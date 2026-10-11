@@ -30,7 +30,7 @@ class FakeCtx {
   createOscillator() {
     const ctx = this
     const o = {
-      frequency: { value: 0 }, type: '', wave: null, connect() {},
+      frequency: { value: 0, ramps: [], setValueAtTime() {}, linearRampToValueAtTime(v, at) { this.ramps.push([v, at]) } }, type: '', wave: null, connect() {},
       setPeriodicWave(w) { o.wave = w },
       start(at) { ctx.tones.push({ freq: o.frequency.value, at }); ctx.oscs.push(o); o.at = at },
       stop(at) { o.until = at },
@@ -289,6 +289,116 @@ describe('the chime at the end of a rest or a hold', () => {
   })
 })
 
+// Settings → "Classic timer sound": the exact three beeps this replaced, picked back with a
+// second argument rather than reviving the old inline beep() calls at the call sites.
+describe('chime(enabled, classic) — the original three beeps', () => {
+  it('makes no sound with sounds off, classic or not', () => {
+    sound.chime(false, true)
+    expect(FakeCtx.instances).toHaveLength(0)
+  })
+
+  it('is the same three tones and timing as the original beep() calls: 880, 880, 1320 Hz', () => {
+    sound.chime(true, true)
+    const tones = ctx().tones
+    expect(tones.map(tn => tn.freq)).toEqual([880, 880, 1320])
+    expect(tones.map(tn => tn.at)).toEqual([0, 0.25, 0.5])
+  })
+
+  it('peaks at a plain beep\'s level, not the louder chime\'s', () => {
+    sound.chime(true, true)
+    const peakOf = events => Math.max(...events.map(([, v]) => v))
+    for (const gain of ctx().gains) expect(peakOf(gain)).toBe(0.35)
+  })
+
+  it('fades from the start instead of holding its peak', () => {
+    sound.chime(true, true)
+    const first = ctx().gains[0]
+    const held = first.find(([kind, v, at]) => kind === 'set' && v === 0.35 && at > 0.05)
+    expect(held).toBeFalsy()
+  })
+
+  it('is a plain sine, not the brighter periodic wave', () => {
+    sound.chime(true, true)
+    expect(ctx().waves).toBe(0)
+    expect(ctx().oscs.every(o => o.type === 'sine' && o.wave === null)).toBe(true)
+  })
+})
+
+// #306: a few more end-of-rest sounds to pick from, each its own shape, none of them clipping.
+describe('the end-of-rest sounds (Settings → Sound)', () => {
+  const peakOf = events => Math.max(...events.map(([, v]) => v))
+  // The module keeps its context between sounds: start each one's record over.
+  const fresh = () => { const c = ctx(); if (c) { c.tones = []; c.gains = []; c.oscs = [] } }
+  // The loudest the notes of a sound can add up to, sampling each one's gain curve as Web Audio
+  // would run it: up from 0.001 in 20 ms, held, then down to 0.001 by the note's end.
+  const loudest = name => {
+    const { notes, peak = 0.35, hold = 0 } = sound.REST_SOUNDS[name]
+    const gain = (t, dur) => {
+      const end = Math.max(0.02, dur * hold)
+      if (t < 0 || t > dur) return 0
+      if (t < 0.02) return 0.001 * Math.pow(peak / 0.001, t / 0.02)
+      if (t < end) return peak
+      return peak * Math.pow(0.001 / peak, (t - end) / (dur - end))
+    }
+    let max = 0
+    for (let t = 0; t < 3; t += 0.001) max = Math.max(max, notes.reduce((a, [, dur, when]) => a + gain(t - when, dur), 0))
+    return max
+  }
+
+  it('offers the chime, the classic beeps and four more, each sounding different', () => {
+    expect(sound.REST_SOUND_IDS).toEqual(['chime', 'classic', 'bell', 'beep', 'whistle', 'soft'])
+    const shapes = new Set()
+    for (const id of sound.REST_SOUND_IDS) {
+      fresh()
+      sound.chime(true, id)
+      shapes.add(JSON.stringify(ctx().tones))
+    }
+    expect(shapes.size).toBe(sound.REST_SOUND_IDS.length)
+  })
+
+  it('never adds up past the point where the output clips', () => {
+    for (const id of sound.REST_SOUND_IDS) expect(loudest(id), id).toBeLessThanOrEqual(1)
+  })
+
+  it('plays each note at its own peak, in its own timbre', () => {
+    sound.chime(true, 'bell')
+    expect(ctx().gains.map(peakOf)).toEqual([0.55, 0.55])
+    expect(ctx().oscs.every(o => o.wave && o.wave.imag[3] === 0.5)).toBe(true)   // the bell's strong 3rd
+    fresh()
+    sound.chime(true, 'soft')
+    expect(ctx().oscs.every(o => o.type === 'sine')).toBe(true)
+    expect(Math.max(...ctx().gains.map(peakOf))).toBeLessThan(sound.CHIME_PEAK / 2)
+  })
+
+  it('glides the whistle upwards, and nothing else', () => {
+    sound.chime(true, 'whistle')
+    expect(ctx().oscs.map(o => o.frequency.ramps.map(([v]) => v))).toEqual([[2100], [2500]])
+    fresh()
+    sound.chime(true, 'bell')
+    expect(ctx().oscs.every(o => !o.frequency.ramps.length)).toBe(true)
+  })
+
+  it('falls back to the chime for a name it does not know, and true still means classic', () => {
+    sound.chime(true, 'kazoo')
+    expect(ctx().tones.map(tn => tn.freq)).toEqual([1319, 988, 1319])
+    fresh()
+    sound.chime(true, true)
+    expect(ctx().tones.map(tn => tn.freq)).toEqual([880, 880, 1320])
+  })
+
+  it('reads the profile\'s pick, with the old classic switch and an older app\'s later choice', () => {
+    expect(sound.restSoundOf({})).toBe('chime')
+    expect(sound.restSoundOf(undefined)).toBe('chime')
+    expect(sound.restSoundOf({ restSound: 'bell' })).toBe('bell')
+    expect(sound.restSoundOf({ restSound: 'kazoo' })).toBe('chime')
+    expect(sound.restSoundOf({ classicChime: true })).toBe('classic')
+    // an older app switched to Classic after this one picked the bell: classic it is
+    expect(sound.restSoundOf({ restSound: 'bell', classicChime: true })).toBe('classic')
+    // an older app switched Classic off again: back to the chime, not classic
+    expect(sound.restSoundOf({ restSound: 'classic', classicChime: false })).toBe('chime')
+  })
+})
+
 // Discord (asierlama): vibration on or off on its own, the way sound is.
 describe('vibrate switch', () => {
   let calls
@@ -325,5 +435,54 @@ describe('vibrate switch', () => {
     Object.defineProperty(navigator, 'vibrate', { value: undefined, configurable: true, writable: true })
     expect(sound.vibrateSupported()).toBe(false)
     expect(() => sound.vibrate(30)).not.toThrow()
+  })
+})
+
+// #375: the end of a rest or a hold, with "Vibrate when the phone is on silent" on in the Android
+// app, buzzes through the native alarm buzz App.jsx hands in; anything else is an ordinary buzz.
+describe('alertBuzz', () => {
+  let calls
+  const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+  beforeEach(() => {
+    calls = []
+    Object.defineProperty(navigator, 'vibrate', { value: p => { calls.push(p); return true }, configurable: true, writable: true })
+  })
+  afterEach(() => { delete navigator.vibrate; sound.setAlarmBuzzer(null) })
+
+  it('without a native buzzer it is the ordinary buzz', () => {
+    sound.alertBuzz([200, 100, 200])
+    expect(calls).toEqual([[200, 100, 200]])
+  })
+
+  it('with one it goes there, and not also the ordinary way', async () => {
+    const native = vi.fn(async () => true)
+    sound.setAlarmBuzzer(native)
+    sound.alertBuzz([200, 100, 200])
+    await flush()
+    expect(native).toHaveBeenCalledWith([200, 100, 200])
+    expect(calls).toEqual([])
+  })
+
+  it('falls back to the ordinary buzz when the native one could not, or threw', async () => {
+    sound.setAlarmBuzzer(async () => false)
+    sound.alertBuzz([200])
+    await flush()
+    sound.setAlarmBuzzer(() => { throw new Error('bridge gone') })
+    sound.alertBuzz([300])
+    await flush()
+    sound.setAlarmBuzzer(() => Promise.reject(new Error('no plugin')))
+    sound.alertBuzz([400])
+    await flush()
+    expect(calls).toEqual([[200], [300], [400]])
+  })
+
+  it('Vibrate off is off for it too', async () => {
+    const native = vi.fn(async () => true)
+    sound.setAlarmBuzzer(native)
+    sound.setVibrate(false)
+    sound.alertBuzz([200, 100, 200])
+    await flush()
+    expect(native).not.toHaveBeenCalled()
+    expect(calls).toEqual([])
   })
 })

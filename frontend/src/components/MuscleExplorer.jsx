@@ -3,14 +3,16 @@ import { useStore } from '../store/useStore.js'
 import { BODYPARTS, allExercises, equipmentOf, searchExercises } from '../lib/exercises.js'
 import { activeProfile, exAvailable } from '../lib/equipment.js'
 import { bestWeightFor } from '../lib/history.js'
-import { fmtNum } from '../lib/format.js'
+import { fmtNum, exCount } from '../lib/format.js'
 import { MUSCLES, MUSCLE_NAME, musclesOf } from '../lib/muscles.js'
 import { t, exerciseNameFor, exerciseNameClass } from '../lib/i18n.js'
 import BodyMap from './BodyMap.jsx'
 import { Thumb } from './Media.jsx'
 import Icon from './Icon.jsx'
+import ExerciseViewToggle from './ExerciseViewToggle.jsx'
 import { Button } from './ui.jsx'
 import { tappable } from '../lib/use-sheet-keyboard.js'
+import { useAutoMore } from '../lib/use-auto-more.js'
 import { isFav, sortFavouritesFirst } from '../lib/favourites.js'
 
 // One explorer for the Library and every catalogue picker. Supplying `onPick` turns
@@ -23,6 +25,7 @@ export default function MuscleExplorer({ onPick, onDetail, onPlan }) {
   const [eq, setEq] = useState('')
   const [shown, setShown] = useState(40)
   const [showAll, setShowAll] = useState(false)   // ignore the active equipment profile for this session
+  const moreRef = useAutoMore(() => setShown(s => s + 40))
   // Same rule as the Library and the picker: the active equipment profile narrows the catalogue
   // (and the per-muscle counts) unless the user asks for everything.
   const profile = activeProfile(S)
@@ -41,10 +44,13 @@ export default function MuscleExplorer({ onPick, onDetail, onPlan }) {
   // Favourites float to the top of whatever the filters left (issue #6), the rest keeps its order.
   const exercises = sortFavouritesFirst(eqOn ? base.filter(e => e.eq === eqOn) : base, S)
   const choose = ex => onPick ? onPick(ex) : onDetail(ex)
+  // The live count and the × of the Library's search (#338): the count while a search or a
+  // filter narrows the muscle's list, the × while there is text.
+  const narrowed = !!(q.trim() || bp || eqOn)
 
   return <>
     {profile && <div className="small dim row" style={{ margin: '-4px 2px 10px', gap: 6, alignItems: 'center' }}>
-      <Icon name="dumbbell" style={{ fontSize: 13 }} />
+      <Icon name="kettlebell" style={{ fontSize: 13 }} />
       {showAll ? t('Showing all equipment') : t('Showing what you have in "{0}"', profile.name)}
       <button className="chip nocap" style={{ marginInlineStart: 'auto', padding: '3px 10px', fontSize: 12 }} onClick={() => { setShowAll(v => !v); setEq(''); setShown(40) }}>
         {showAll ? t('Filter by "{0}"', profile.name) : t('Show all equipment')}
@@ -60,25 +66,30 @@ export default function MuscleExplorer({ onPick, onDetail, onPlan }) {
       </div>
     </div>
 
-    {!selected && onPick && <div className="empty"><div className="ico"><Icon name="target" /></div>{t('Choose a muscle to see exercises that train it.')}</div>}
+    {!selected && onPick && <div className="empty"><div className="ico"><Icon name="figureStrength" /></div>{t('Choose a muscle to see exercises that train it.')}</div>}
 
     {selected && <>
       <div className="row between" style={{ margin: '2px 0 10px' }}>
         <h4 className="sec" style={{ margin: 0 }}>{t('Exercises for {0}', t(MUSCLE_NAME[selected]))}</h4>
         <Button size="sm" variant="ghost" onClick={() => pick(selected)}>{t('Clear selection')}</Button>
       </div>
-      <div className="search" style={{ marginBottom: 10 }}><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+      <div className="search-row" style={{ marginBottom: 10 }}><div className={'search' + (narrowed ? ' has-count' : '') + (q ? ' has-clear' : '')}><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
         <input className="input" placeholder={t('Search…')} value={q} onChange={e => { setQ(e.target.value); setShown(40) }} />
-      </div>
+        {narrowed && <span className="search-count" role="status" aria-label={exCount(exercises.length)}>{fmtNum(exercises.length)}</span>}
+        {q && <button className="clear" onClick={() => { setQ(''); setShown(40) }} aria-label={t('Clear')}><Icon name="xmark" /></button>}
+      </div><ExerciseViewToggle /></div>
+      {/* Changing body part keeps the equipment filter (issue #71, same rule as Library): the
+          eqOn fallback above drops it only for this view if the new body part has nothing under
+          it, without forgetting the choice. "All" clears it, since it spans every body part. */}
       <div className="chips" style={{ marginBottom: eqOpts.length > 1 ? 8 : 12 }}>
         <button className={'chip nocap' + (!bp ? ' on' : '')} onClick={() => { setBp(''); setEq(''); setShown(40) }}>{t('All')}</button>
-        {BODYPARTS.map(b => <button key={b} className={'chip' + (bp === b ? ' on' : '')} onClick={() => { setBp(b); setEq(''); setShown(40) }}>{t(b)}</button>)}
+        {BODYPARTS.map(b => <button key={b} className={'chip' + (bp === b ? ' on' : '')} onClick={() => { setBp(b); setShown(40) }}>{t(b)}</button>)}
       </div>
       {eqOpts.length > 1 && <div className="chips" style={{ marginBottom: 12 }}>
         <button className={'chip nocap' + (!eqOn ? ' on' : '')} onClick={() => { setEq(''); setShown(40) }}>{t('Any equipment')}</button>
         {eqOpts.map(x => <button key={x} className={'chip' + (eqOn === x ? ' on' : '')} onClick={() => { setEq(x); setShown(40) }}>{t(x)}</button>)}
       </div>}
-      <div className="list">
+      <div className={'list' + (S.exerciseView === 'cards' ? ' ex-grid' : '')}>
         {exercises.slice(0, shown).map(e => {
           const best = bestWeightFor(S, e.id)
           const primary = musclesOf(e)[selected] === 1
@@ -93,7 +104,7 @@ export default function MuscleExplorer({ onPick, onDetail, onPlan }) {
         })}
         {exercises.length === 0 && <div className="empty"><div className="ico"><Icon name="magnifier" /></div>{t('No match')}</div>}
       </div>
-      {exercises.length > shown && <><div style={{ height: 10 }} /><Button onClick={() => setShown(s => s + 40)}>{t('Show more')}</Button></>}
+      {exercises.length > shown && <><div style={{ height: 10 }} /><Button ref={moreRef} onClick={() => setShown(s => s + 40)}>{t('Show more')}</Button></>}
     </>}
   </>
 }

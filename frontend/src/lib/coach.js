@@ -12,16 +12,18 @@
 // The screens that call it arrive in PR 4. Nothing in this file needs one to be tested, which
 // is the point of it being separate from them.
 
-import { EXIDX } from './exercises.js'
+import { EXIDX, canonicalExId } from './exercises.js'
 import { modeOf, isBw, isPerSide, cleanupSg } from './history.js'
 import { uid, todayISO, DAYN } from './format.js'
 import { mergePlan } from './plan-share.js'
 import { deleteRoutine } from './routines.js'
 import { POLICIES } from './progression.js'
-import { t } from './i18n.js'
+import { t, tn } from './i18n.js'
 
 // Bumping this re-prompts everyone: it means what we share, or who we share it with, changed.
-export const CONSENT_VERSION = 1
+// 2: the training line names the session notes, which the payload carries and version 1 never
+// mentioned.
+export const CONSENT_VERSION = 2
 
 // Bounds. The whole state has to stay inside the server's 5 MB body limit, and a Coach log
 // that grows forever is exactly the kind of thing that eats it invisibly. Worst case here is
@@ -62,12 +64,15 @@ export const coachAvailable = (config, user, { demo, mobile, coachMode } = {}) =
 
 // What each data category means, in the user's words. Rendered from the same list the payload
 // builder uses (api/coach/core/categories.js), so the screen cannot promise less than leaves.
+// Each entry returns [title, detail] in the current language, through literal t() calls so
+// check-source-strings sees every key. When the screens passed these to t() as variables the
+// checker could not see them, and eight of the ten had no translation in any pack.
 export const CATEGORY_TEXT = {
-  plan: ['Your plan', 'Routines, exercises, sets and reps, your weekly schedule and progression settings.'],
-  training: ['Your logged training', 'Sets you logged in the review window — weights, reps, times, effort ratings and how long sessions took.'],
-  bodyweight: ['Body weight', 'Weigh-ins from the same window, and your goal weight if you set one.'],
-  profile: ['What you tell the Coach', 'Your intake answers, including any limitations or injuries you describe.'],
-  prefs: ['A few preferences', 'Your unit, your language and which effort scale you log.']
+  plan: () => [t('Your plan'), t('Routines, exercises, sets and reps, your weekly schedule and progression settings.')],
+  training: () => [t('Your logged training'), t('Sets you logged in the review window: weights, reps, times, effort ratings, how long sessions took, and your session notes.')],
+  bodyweight: () => [t('Body weight'), t('Weigh-ins from the same window, and your goal weight if you set one.')],
+  profile: () => [t('What you tell the Coach'), t('Your intake answers, including any limitations or injuries you describe.')],
+  prefs: () => [t('A few preferences'), t('Your unit, your language and which effort scale you log.')]
 }
 export const hasConsent = S => !!S?.coach?.consent?.agreedAt && S.coach.consent.version === CONSENT_VERSION
 
@@ -370,7 +375,7 @@ export function profileLines(p) {
   const lines = []
   if (goal) lines.push(t(goal))
   if (exp) lines.push(t(exp))
-  if (p.daysPerWeek) lines.push(p.daysPerWeek === 1 ? t('1 day a week') : t('{0} days a week', p.daysPerWeek))
+  if (p.daysPerWeek) lines.push(tn('1 day a week', '{0} days a week', p.daysPerWeek))
   if (p.sessionMin) lines.push(t('{0} min per session', p.sessionMin))
   if (p.equipment?.length) lines.push(p.equipment.join(', '))
   if (p.limitations) lines.push(t('Limits: {0}', p.limitations))
@@ -420,7 +425,8 @@ const CHANGE_APPLY = {
   'add-exercise': (s, c) => {
     const r = need(findRoutine(s, c.target.routineId))
     const a = c.after || {}
-    const e = { id: a.id, sets: a.sets || 3, mode: a.mode || 'reps' }
+    // A drawing's id the Coach may have picked up names the exercise it draws.
+    const e = { id: canonicalExId(a.id), sets: a.sets || 3, mode: a.mode || 'reps' }
     if (e.mode === 'cardio') { e.min = a.min || 20; e.speed = a.speed || 8 }
     else if (e.mode === 'time') e.sec = a.sec || 45
     else e.reps = a.reps || 10
@@ -428,6 +434,7 @@ const CHANGE_APPLY = {
     if (POLICIES.includes(a.prog)) e.prog = a.prog
     if (Number.isInteger(a.repsMin)) e.repsMin = a.repsMin
     if (Number.isInteger(a.repsMax)) e.repsMax = a.repsMax
+    if (Number.isInteger(a.setsMax)) e.setsMax = a.setsMax   // triple progression's set ceiling
     // Only when the Coach disagreed with the catalogue: an absent flag has always meant
     // "whatever the exercise says", and writing one out would freeze today's dataset into
     // the plan.
@@ -455,7 +462,7 @@ const CHANGE_APPLY = {
     // app halve a rep count that was never per-side, so an explicit flag is dropped and the new
     // exercise goes back to whatever the catalogue says about it.
     const { bodyweight, side, ...keep } = old
-    r.ex[i] = { ...keep, id: a.id, ...(a.sets ? { sets: a.sets } : {}), ...(a.reps ? { reps: a.reps } : {}), ...(a.weight > 0 ? { weight: a.weight } : {}) }
+    r.ex[i] = { ...keep, id: canonicalExId(a.id), ...(a.sets ? { sets: a.sets } : {}), ...(a.reps ? { reps: a.reps } : {}), ...(a.weight > 0 ? { weight: a.weight } : {}) }
   },
   sets: (s, c) => { need(findExIn(s, c)).sets = c.after },
   reps: (s, c) => { need(findExIn(s, c)).reps = c.after },
@@ -505,9 +512,10 @@ const CHANGE_APPLY = {
       id: uid(), name: a.name, emoji: a.emoji || '🏋️',
       ...(POLICIES.includes(a.prog) ? { prog: a.prog } : {}),
       ex: a.ex.map(e => ({
-        id: e.id, sets: e.sets || 3, mode: e.mode || 'reps',
+        id: canonicalExId(e.id), sets: e.sets || 3, mode: e.mode || 'reps',
         ...(e.mode === 'time' ? { sec: e.sec || 45 } : { reps: e.reps || 10 }),
         ...(Number.isInteger(e.repsMax) ? { repsMax: e.repsMax } : {}),
+        ...(Number.isInteger(e.setsMax) ? { setsMax: e.setsMax } : {}),
         ...(e.bodyweight != null ? { bodyweight: !!e.bodyweight } : {}),
         ...(e.side ? { side: true } : {})
       }))
@@ -605,7 +613,7 @@ export function changeTitle(c, S) {
   const ex = c.target?.exId ? exTitle(c.target.exId) : null
   switch (c.type) {
     case 'add-exercise': return t('Add {0}', exTitle(c.after?.id))
-    case 'remove-exercise': return t('Drop {0}', ex)
+    case 'remove-exercise': return t('Remove {0}', ex)
     case 'swap-exercise': return t('Swap {0} for {1}', ex, exTitle(c.after?.id))
     case 'sets': return t('{0}: sets', ex)
     case 'reps': return t('{0}: reps', ex)
@@ -637,7 +645,7 @@ export function changeValues(c, S) {
       const ids = [].concat(v ?? []).filter(x => x && x !== 'rest')
       return ids.length ? ids.map(routineName).join(' + ') : t('Rest')
     }
-    if (v == null) return '—'
+    if (v == null) return '–'
     if (typeof v === 'object') return v.id ? exTitle(v.id) : v.name || JSON.stringify(v)
     if (Array.isArray(v)) return v.length + ''
     return String(v)

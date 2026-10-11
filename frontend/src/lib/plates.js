@@ -13,6 +13,7 @@ import { EXIDX } from './exercises.js'
 import { usesBar, defaultBarWeight } from './bar.js'
 import { isBw } from './history.js'
 import { weightIncrement } from './progression.js'
+import { ownedWeightsFor, ownedFloor } from './dumbbells.js'
 
 /** The plate sizes the inventory editor lists, heaviest first, per unit. */
 export const PLATE_SIZES = {
@@ -47,8 +48,8 @@ const sizesOf = entry => (entry && typeof entry === 'object' && !Array.isArray(e
 export const ownsPlates = S => sizesOf(S?.plates?.[unitOf(S)]).length > 0
 
 /**
- * The plates this profile can load, heaviest first: [{ w, n }] with n pairs (or plates, for a
- * single stack) of each size. S.plates[unit] is { [size]: count, _ts }; absent or without any
+ * The plates this profile can load, heaviest first: [{ w, n }] with n pairs of each size (a
+ * single stack loads both plates of a pair, see rowLoad). S.plates[unit] is { [size]: count, _ts }; absent or without any
  * size → the default set.
  */
 export function inventoryFor(S) {
@@ -111,8 +112,9 @@ const q = w => Math.round(w * Q)
  *   → { plates: [w, …] heaviest first, missing: number }   (missing 0 = exact)
  */
 export function plateStack(weight, inv) {
-  const target = q(Math.max(0, num(weight)))
-  if (target === 0) return { plates: [], missing: 0 }
+  const requested = Math.max(0, num(weight))
+  const target = Math.floor(requested * Q)
+  if (target === 0) return { plates: [], missing: requested }
   const items = (inv || []).filter(p => p.w > 0 && p.n > 0).sort((a, b) => b.w - a.w)
   // 1. greedy
   const greedy = []
@@ -126,7 +128,7 @@ export function plateStack(weight, inv) {
   // missing. The search below would only find that again, with a table as long as the target:
   // a typo like 9999 in a weight field built it on every keystroke.
   const all = items.reduce((sum, p) => sum + q(p.w) * p.n, 0)
-  if (left === 0 || target >= all) return { plates: greedy, missing: left / Q }
+  if (left === 0 || target >= all) return { plates: greedy, missing: requested - (target - left) / Q }
   // 2. exact fit with the fewest plates: f[i][s] = min plates using sizes i.. to make s
   const n = items.length
   const INF = 1e9
@@ -159,7 +161,7 @@ export function plateStack(weight, inv) {
       }
     }
   }
-  return { plates, missing: (target - sum) / Q }
+  return { plates, missing: requested - sum / Q }
 }
 
 /**
@@ -222,7 +224,10 @@ export function rowLoad(kind, weight, base, inv) {
   const b = Math.max(0, num(base))
   if (w <= b) return { kind, barOnly: true, perSide: 0, plates: [], missing: 0 }
   const perSide = Math.round(((w - b) / (kind === 'pairs' ? 2 : 1)) * 100) / 100
-  const { plates, missing } = plateStack(perSide, inv)
+  // The inventory counts pairs. A bar takes one plate of a pair per side; a single stack can
+  // take both, so one pair of 20s is two 20s on a sled, not one.
+  const stock = kind === 'single' ? (inv || []).map(p => ({ ...p, n: p.n * 2 })) : inv
+  const { plates, missing } = plateStack(perSide, stock)
   return { kind, barOnly: false, perSide, plates, missing }
 }
 
@@ -232,12 +237,17 @@ export const sameLoad = (a, b) =>
   && a.plates.length === b.plates.length && a.plates.every((w, i) => w === b.plates[i])
 
 /**
- * Where a drop-set's next weight may land (lib/workout-model.js nextDropWeight): on the plates
+ * Where a drop-set's next weight may land (lib/workout-model.js nextDropWeight): on the dumbbells
+ * this profile owns for a dumbbell lift, on the plates
  * this profile owns when it has counted them and the exercise is plate-loaded — the heaviest load
  * at or below the drop that those plates make — else on the exercise's own weight step. A drop
  * rounded to .5 read 48.5 kg on a bar that loads in 2.5s (QA 1.3.9).
  */
 export function dropGrid(S, cfg) {
+  // A dumbbell lift with the bells you own listed (issue #376) drops to the heaviest one at or
+  // under the drop: a 20% drop from 21 kg is 16.8, and the rack holds a 15.
+  const owned = ownedWeightsFor(S, cfg)
+  if (owned) return w => ownedFloor(owned, w)
   const kind = loadKindFor(S, cfg)
   if (ownsPlates(S) && (kind === 'pairs' || kind === 'single')) {
     const base = baseWeightFor(S, cfg?.id)

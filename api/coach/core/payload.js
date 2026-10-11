@@ -18,6 +18,11 @@ export const CONTRACT = 1;
 // makes the payload bigger and the reading vaguer, not better.
 export const MAX_WEEKS = 12;
 export const MAX_SESSIONS = 60;
+// The most a session note can be: the app's own cap (frontend/src/lib/history.js NOTE_MAX, pinned
+// by api/test/payload-parity.test.js), so a note the athlete wrote arrives whole and the bound only
+// holds for a document edited outside the app. It was 300 here, and a 500-character note reached
+// the model cut off mid-sentence.
+export const NOTE_MAX = 500;
 // Last-resort ceiling for a free-text note/refine (issue #267). The real limit is the admin's
 // `maxMessageLen`, enforced in jobs.js before a message ever reaches this module — this module
 // stays a pure allowlist with no config import of its own, so it keeps its own constant instead.
@@ -84,6 +89,12 @@ const num = v => ((typeof v === 'number' && Number.isFinite(v)) || (typeof v ===
 // A date is the ISO day every screen writes; anything else is not a date.
 const day = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null);
 const list = v => (Array.isArray(v) ? v : []);
+// The equipment of the profile the app is filtering by, or nothing when filtering is off.
+function activeEquipment(S) {
+  if (!S.equipFilterOn) return [];
+  const prof = list(S.equipProfiles).find(x => x && x.id === S.activeEquipId);
+  return list(prof?.equipment);
+}
 function cleanProfile(profile) {
   const days = Array.isArray(profile.preferredDays) ? profile.preferredDays : [];
   const equipment = Array.isArray(profile.equipment) ? profile.equipment : [];
@@ -149,7 +160,10 @@ function readSession(entry, fallback) {
   const mode = modeOf(target, ex);
   const bw = isBw(target, ex);
   const logged = ((entry && entry.sets) || []).filter(s => !isWarmupSet(s));
-  const planned = target.sets || logged.length;
+  // Triple progression's per-set aims (frontend readSession): only on the session's own target.
+  const rowGoals = mode === 'reps' && entry && entry.target && Array.isArray(target.rowReps) && target.rowReps.length
+    ? target.rowReps.map(r => Math.max(0, Number(r) || 0)) : null;
+  const planned = rowGoals ? rowGoals.length : (target.sets || logged.length);
   const enough = logged.length >= planned;
   // Only the sets the plan asked for decide whether the session was hit, exactly as
   // frontend/src/lib/progression.js readSession has done since issue #233. This copy graded
@@ -157,18 +171,21 @@ function readSession(entry, fallback) {
   // app and a miss here — and stallCount, reading only this copy, reported a stall the athlete
   // never had. `count` below stays the real total: extra sets are exactly how bodyweight work
   // is meant to grow (#33), they just do not decide whether the prescription was met.
-  const sets = logged.slice(0, Math.max(1, planned));
+  // Only a plan the session itself carried may decide where that line falls, as on the
+  // frontend: a Hevy or CSV import has no target of its own, and slicing it to the `fallback`
+  // config's set count would grade the warm-up end of a session nobody planned that way.
+  const sets = entry && entry.target ? logged.slice(0, Math.max(1, planned)) : logged;
   if (mode === 'time') {
     const goal = target.sec || 0;
     const held = sets.map(s => (s.done ? (s.sec || 0) : 0));
     return { mode, bw, goal, ok: goal > 0 && enough && held.length > 0 && held.every(h => h >= goal) };
   }
-  const goal = target.reps || 0;
+  const goal = rowGoals ? Math.max(...rowGoals) : (target.reps || 0);
   const reps = sets.map(s => (s.done ? (s.r || 0) : 0));
   // Set count is the dimension bodyweight work grows once reps hit their ceiling (upstream
   // #33), so it travels alongside the reps rather than being inferred from them downstream.
   const done = logged.filter(s => s.done).length;
-  return { mode, bw, goal, count: done, ok: goal > 0 && enough && reps.length > 0 && reps.every(r => r >= goal) };
+  return { mode, bw, goal, count: done, ok: goal > 0 && enough && reps.length > 0 && reps.every((r, k) => r >= (rowGoals ? rowGoals[k] ?? goal : goal)) };
 }
 /** Consecutive misses counting back from the most recent session. */
 export function stallCount(sessions) {
@@ -192,6 +209,8 @@ function cleanEx(e) {
   // repsMax is the ceiling that turns "+1 rep forever" into "add a set and start over"; without
   // it the Coach cannot see, or propose, how a bodyweight exercise is meant to progress.
   put('repsMax', e.repsMax);
+  // Triple progression's set ceiling: `sets` is where its cycle starts, `setsMax` where it ends.
+  put('setsMax', e.setsMax);
   // Written out only when they disagree with the catalogue, matching plan-share.js — an
   // absent flag has always meant "whatever the exercise says", and still does.
   if (e.bodyweight != null) o.bodyweight = !!e.bodyweight;
@@ -335,8 +354,9 @@ function trainedIds(S, workouts) {
 // while stalls and trends already live in `aggregates`, computed over the full window.
 export const FULL_DETAIL_SESSIONS = 3;
 
+// A set taken to failure (the app's "F", `failure: true`) is RIR 0 when nothing was rated.
 const fmtSet = s => {
-  const eff = s.rir != null ? '@RIR' + s.rir : s.rpe != null ? '@RPE' + s.rpe : '';
+  const eff = s.rir != null ? '@RIR' + s.rir : s.rpe != null ? '@RPE' + s.rpe : s.failure === true && !isWarmupSet(s) ? '@failure' : '';
   if (s.sec != null) return s.sec + 's' + eff;
   if (s.min != null) return s.min + 'min' + (s.speed != null ? '/' + s.speed : '') + eff;
   return (s.w != null ? s.w + 'x' : '') + (s.r != null ? s.r : '?') + eff;
@@ -346,6 +366,7 @@ const fmtSet = s => {
 function cleanSet(s) {
   const o = { done: !!s.done };
   if (isWarmupSet(s)) o.warmup = true;
+  else if (s.failure === true) o.failure = true;
   for (const k of ['w', 'r', 'sec', 'min', 'speed', 'rir', 'rpe']) if (num(s[k]) !== undefined) o[k] = s[k];
   return o;
 }
@@ -389,7 +410,7 @@ function cleanWorkout(w) {
     name: word(w.name, NAME_MAX),
     minutes: w.end && w.start ? Math.round((w.end - w.start) / 60000) : null,
     ...(w.rating ? { rating: typeof w.rating === 'number' ? w.rating : text(String(w.rating), 20) } : {}),
-    ...(w.note ? { note: String(w.note).slice(0, 300) } : {}),
+    ...(w.note ? { note: String(w.note).slice(0, NOTE_MAX) } : {}),
     prs: list(w.prs).length,
     entries: entriesOf(w).map(en => ({
       id: ident(en.id),
@@ -478,6 +499,12 @@ export function build(S, opts = {}) {
     coachProfile: profile && typeof profile === 'object' ? cleanProfile(profile) : null,
     plan: cleanPlan(S)
   };
+  // Someone who set up a home gym under Settings → Equipment and left the Coach's own equipment
+  // question empty was handed the whole catalogue, leverage machines and all. The profile they
+  // are filtering the app with is the better answer than "everything".
+  if (p.coachProfile && !p.coachProfile.equipment.length) {
+    p.coachProfile.equipment = cleanProfile({ equipment: activeEquipment(S) }).equipment;
+  }
 
   // What the user already turned down, so the Coach does not re-propose it without new
   // evidence (FR-26). Summaries only — the log's full before/after stays on the device.

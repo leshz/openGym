@@ -7,7 +7,7 @@
 // catalogue-first (EXIDX), exactly like the fatigue/strength maps, falling back to the
 // logged snapshot (muscleWeights) for exercises no longer in the catalogue.
 import { best1RM } from './onerm.js'
-import { entriesForExercise } from './history.js'
+import { entriesForExercise, workoutAt } from './history.js'
 import { STRENGTH_FULL_MS, STRENGTH_HALF_LIFE_MS, STRENGTH_FLOOR, halfLifeDecay } from './recovery.js'
 import { musclesOf } from './muscles.js'
 import { EXIDX } from './exercises.js'
@@ -28,7 +28,7 @@ function strengthFromAge(ageMs) {
 function lastWorkSetAt(S, id) {
   let latest = -Infinity
   for (const workout of S?.workouts || []) {
-    const ts = workout.start || new Date(workout.d).getTime()
+    const ts = workoutAt(workout)
     if (!Number.isFinite(ts) || ts <= latest) continue
     const entries = entriesForExercise(workout, id)
     if (entries.some(entry => (entry.sets || []).some(s => hasCompletedWork(s) && !isWarmupRow(s)))) latest = ts
@@ -38,15 +38,15 @@ function lastWorkSetAt(S, id) {
 
 function snapshotWeights(entry) {
   const catalogue = entry && typeof entry === 'object' ? EXIDX[entry.id] : null
-  if (catalogue) {
-    const weights = musclesOf(catalogue)
-    if (Object.keys(weights).length) return weights
-  }
+  if (catalogue) return musclesOf(catalogue)
   const direct = entry && typeof entry === 'object'
     ? (entry.muscleWeights || entry.muscleSnapshot?.muscleWeights)
     : null
   if (direct && typeof direct === 'object' && !Array.isArray(direct) && Object.keys(direct).length) {
-    return direct
+    return Object.fromEntries(Object.entries(direct).filter(([, value]) => {
+      const weight = Number(value)
+      return Number.isFinite(weight) && weight > 0
+    }))
   }
   return musclesOf(entry)
 }
@@ -76,19 +76,14 @@ function workoutDay(workout) {
   return typeof day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null
 }
 
-function workoutTimestamp(workout) {
-  if (Number.isFinite(workout?.start)) return workout.start
-  const day = workoutDay(workout)
-  const timestamp = day ? new Date(day + 'T12:00:00').getTime() : NaN
-  return Number.isFinite(timestamp) ? timestamp : -Infinity
-}
-
 function entriesWithId(S, id) {
   let order = 0
   return (S?.workouts || []).flatMap(workout => entriesForExercise(workout, id).map(entry => ({
     entry,
     day: workoutDay(workout),
-    timestamp: workoutTimestamp(workout),
+    // -Infinity, not NaN: isNewerOccurrence compares these with `!==` then `>`, and a NaN pair
+    // would answer "not equal, not greater" instead of falling through to insertion order.
+    timestamp: Number.isFinite(workoutAt(workout)) ? workoutAt(workout) : -Infinity,
     order: order++,
   })))
 }
@@ -150,9 +145,9 @@ export function strengthExerciseRows(S, now) {
 }
 
 /**
- * Strength rows for the exercises whose logged snapshot includes `slug` (primary 1 /
- * secondary 0.4 badge), each with the exercise's OWN decay and expected current 1RM - the
- * tapped muscle filters the list, the row still speaks for the exercise.
+ * Strength rows for exercises with positive resolved muscle credit for `slug`; catalogue
+ * metadata takes precedence over saved snapshots when available. Each row keeps the exercise's
+ * OWN decay and expected current 1RM - the tapped muscle filters the list, not the row's metrics.
  */
 export function strengthExerciseRowsForMuscle(S, now, slug) {
   const seen = new Map()

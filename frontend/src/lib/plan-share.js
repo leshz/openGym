@@ -8,10 +8,14 @@
 //  2. A clean, printable page (Save as PDF) where a single exercise never splits across
 //     a page break — each exercise, and each routine that fits, stays in one place.
 
-import { EXIDX, isBodyweightEq } from './exercises.js'
+import { EXIDX, canonicalExId, isBodyweightEq } from './exercises.js'
 import { cleanUrl } from './media-refs.js'
 import { modeOf, exLine, MAX_PLANNED_WARMUPS } from './history.js'
 import { deriveSessionName } from './session-merge.js'
+import { isPyramid, normalizePyramid, normalizePyramidRest, normalizePyramidWeight } from './pyramid.js'
+import { isBackoff } from './backoff.js'
+import { dbLoadOf } from './dumbbells.js'
+import { MAX_TRIPLE_SETS } from './progression.js'
 import { uid, todayISO, DAYN, weekOrder, weekStartOf, exCount } from './format.js'
 import { t, exerciseNameFor, exerciseNameClass, getLang, RTL_LANGS } from './i18n-core.js'
 import { convertWeight } from './units.js'
@@ -45,6 +49,7 @@ function convertedExercise(e, sourceUnit, destinationUnit) {
   if (out.weight != null) out.weight = convertWeight(out.weight, sourceUnit, destinationUnit)
   // A timed increment is seconds, not a load. Rep-mode increments are load overrides.
   if (modeOf(out) === 'reps' && out.inc > 0) out.inc = convertWeight(out.inc, sourceUnit, destinationUnit)
+  if (Array.isArray(out.pyramidWeight)) out.pyramidWeight = out.pyramidWeight.map(w => (w > 0 ? convertWeight(w, sourceUnit, destinationUnit) : w))
   return out
 }
 
@@ -77,20 +82,37 @@ function cleanEx(e) {
   } else {
     if (e.reps != null) o.reps = e.reps
     if (e.weight) o.weight = e.weight
+    // Pyramid sets are the prescription itself; without them a "12 · 8 · 6 · Max · 12" arrives as 5 × 12.
+    if (isPyramid(e)) {
+      o.pyramid = normalizePyramid(e.pyramid)
+      const rest = normalizePyramidRest(e.pyramidRest, o.pyramid.length)
+      if (rest.length) o.pyramidRest = rest
+      const weight = normalizePyramidWeight(e.pyramidWeight, o.pyramid.length)
+      if (weight.length) o.pyramidWeight = weight
+    }
   }
   // How the exercise is logged travels too (issues #31/#32) — the bodyweight flag only when
   // it disagrees with the catalogue, since agreeing is what the other end already assumes.
   if (e.bodyweight != null && e.bodyweight !== isBodyweightEq(e.id)) o.bodyweight = e.bodyweight
-  // Only on reps work — `side` counts reps, and a timed hold has none to split.
-  if (e.side && mode !== 'time' && mode !== 'cardio') o.side = true
+  // Reps work and timed holds (a per-side hold is an L and an R hold per set); never cardio.
+  if (e.side && mode !== 'cardio') o.side = true
   // Progression settings travel with the plan — a shared Greyskull routine that arrives
   // without its rule is just a list of weights.
   if (e.prog) o.prog = e.prog
   if (e.inc > 0) o.inc = e.inc
+  // Back-off sets step down by that same step; written only when on (lib/backoff.js).
+  if (isBackoff(e)) o.backoff = true
+  // "Last set to failure" is how the exercise is prescribed too; only when on, never on cardio.
+  if (e.lastToFailure === true && mode !== 'cardio') o.lastToFailure = true
   // Epley deload factor is a per-occurrence progression setting. Omit the default so older
   // exports remain compact and importing them preserves the default 90% behaviour.
   if (e.deloadFactor != null && Number(e.deloadFactor) !== 0.9) o.deloadFactor = e.deloadFactor
+  // What a dumbbell weight means in this slot (lib/dumbbells.js): without it "20 each" arrives
+  // as a bare 20 and the other end counts half the volume.
+  if (dbLoadOf(e.dbLoad)) o.dbLoad = dbLoadOf(e.dbLoad)
   if (e.repsMin != null) o.repsMin = e.repsMin
+  // Triple progression's set ceiling (progression.js tripleSetsOf), rep work only.
+  if (mode === 'reps' && e.setsMax > 0) o.setsMax = Math.min(MAX_TRIPLE_SETS, Math.round(e.setsMax))
   if (e.repsMax != null) o.repsMax = e.repsMax
   // The exercise's own rest (issue #10) is part of how it is prescribed, so it travels too —
   // only when set, so a plan that never asked for one leaves the recipient's own default
@@ -199,10 +221,12 @@ export function buildPlanBundle(S, name) {
  * is trained.
  */
 export function parsePlan(raw, destinationUnit = 'kg') {
-  const data = typeof raw === 'string' ? JSON.parse(raw) : raw
+  const notPlan = () => Object.assign(new Error(t('this isn’t an openGym plan file')), { code: 'not-plan' })
+  let data = raw
+  if (typeof raw === 'string') { try { data = JSON.parse(raw) } catch { throw notPlan() } }
   const destination = planUnit(destinationUnit)
   if (!data || typeof data !== 'object' || Array.isArray(data) || !data.opengym_plan || !Array.isArray(data.routines) || !destination) {
-    throw new Error(t('this isn’t an openGym plan file'))
+    throw notPlan()
   }
   const sourceUnit = declaredPlanUnit(data)
   const customEx = (Array.isArray(data.customEx) ? data.customEx : []).filter(c => c && c.id)
@@ -216,13 +240,18 @@ export function parsePlan(raw, destinationUnit = 'kg') {
       return ok
     }).map(e => {
       // The exercises pass through as written, so the fields that carry numbers into the
-      // planner get the same clamps on the way in that they get on the way out.
+      // planner get the same clamps on the way in that they get on the way out. A drawing's id
+      // (the female figure of an exercise) becomes the exercise's own.
       const warm = cleanWarmupSets(e.warmupSets)
       const intens = cleanIntensifier(e.intensifier)
       const rest = cleanRestSec(e.restSec)
       const warmRest = cleanRestSec(e.warmupRestSec)
-      const { warmupSets, intensifier, restSec, warmupRestSec, ...passthrough } = e
-      return convertedExercise({ ...passthrough, ...(warm ? { warmupSets: warm } : {}), ...(intens ? { intensifier: intens } : {}), ...(rest ? { restSec: rest } : {}), ...(warmRest ? { warmupRestSec: warmRest } : {}) }, sourceUnit || destination, destination)
+      const pyramid = normalizePyramid(e.pyramid)
+      const pyramidRest = pyramid.length ? normalizePyramidRest(e.pyramidRest, pyramid.length) : []
+      const pyramidWeight = pyramid.length ? normalizePyramidWeight(e.pyramidWeight, pyramid.length) : []
+      const { warmupSets, intensifier, restSec, warmupRestSec, pyramid: _pyramid, pyramidRest: _pyramidRest, pyramidWeight: _pyramidWeight, ...passthrough } = e
+      if (!known.has(passthrough.id)) passthrough.id = canonicalExId(passthrough.id)
+      return convertedExercise({ ...passthrough, ...(pyramid.length ? { pyramid } : {}), ...(pyramidRest.length ? { pyramidRest } : {}), ...(pyramidWeight.length ? { pyramidWeight } : {}), ...(warm ? { warmupSets: warm } : {}), ...(intens ? { intensifier: intens } : {}), ...(rest ? { restSec: rest } : {}), ...(warmRest ? { warmupRestSec: warmRest } : {}) }, sourceUnit || destination, destination)
     })
   }))
   return {
@@ -275,7 +304,7 @@ export function mergePlan(s, bundle, { schedule } = {}) {
       emoji: r.emoji,
       ...(r.prog ? { prog: r.prog } : {}),
       ...(r.excludeFromProgression === true ? { excludeFromProgression: true } : {}),
-      ex: (r.ex || []).map(e => ({ ...e, id: exIdMap[e.id] || e.id }))
+      ex: (r.ex || []).map(e => ({ ...e, id: exIdMap[e.id] || canonicalExId(e.id) }))
     })
   })
   if (schedule) {
@@ -308,8 +337,8 @@ function scheme(e, unit, speedUnit) {
     return sets > 1 ? `${sets} × ${body}` : body
   }
   const line = exLine({ ...e, reps: e.reps ?? 10 }, unit, speedUnit)
-  const intens = intensifierLine(e.intensifier)
-  return intens ? `${line} · ${intens}` : line
+  const extras = [intensifierLine(e.intensifier), e.lastToFailure === true ? t('Last set to failure') : ''].filter(Boolean)
+  return [line, ...extras].join(' · ')
 }
 
 // A drop-set or rest-pause is how the exercise is prescribed, so the printout names it — the
@@ -443,7 +472,7 @@ export function planPrintHTML(S, owner, { routineId } = {}) {
   </header>
   ${week}
   ${body}
-  <footer>${esc(t('Made with openGym'))} · opengym.duarte-santos.ch</footer>
+  <footer>${esc(t('Made with openGym'))} · opengym.ch</footer>
 </div></body></html>`
 }
 

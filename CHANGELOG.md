@@ -1,5 +1,339 @@
 # Changelog
 
+## v1.4.1 (2026-10-10)
+
+Bug fixes for v1.4.0, mostly the things you told us about on Discord and GitHub.
+
+- **Smooth animations in the app.** They lagged and stuttered on real phones (the phone's video
+  player stalled at every loop). The app now shows them as animated images, the way the old GIFs
+  worked, with the original timing. The web and self-hosted servers keep their clips.
+- **The update check finds new versions again.** It asked the GitLab mirror, which never got
+  v1.4.0. It asks GitHub now, and the 300 MB download goes straight to storage instead of into
+  memory, checked against its checksum before the installer opens.
+- **The rest bell rings over music.** With the app open, the end tone now plays like the
+  screen-off alarm does: your music turns down for a moment instead of drowning it.
+- **The Coach has its own button** on the Plan page, no more hunting in the share menu.
+- **Search**: the exercises you have done come right after your favourites, and "leg press"
+  finds the plain 45° leg press first.
+- **Add exercise** gets the Type row the library has (#521).
+- **Exercise progress** gets 1M / 3M / 1Y / All, like the body weight chart (#511).
+- **Imports**: two workouts on the same day stay two (#505).
+- **Coach**: an OpenAI-compatible server without /v1 in its address works, e.g. Open WebUI (#508).
+
+## v1.4.0 (2026-10-09)
+
+The biggest update openGym has had: a new exercise database with 5,632 exercises and new
+animations, everything that was planned for v1.3.11 and v1.3.12, and the features you asked for
+most. Forty-seven community pull requests from twenty contributors. Web bundle, APK and API image.
+
+**Nothing you logged changes.** Every exercise that ever shipped keeps its id, name and muscles,
+so workouts, routines, records and backups stay exactly as they are. A phone still on v1.3.x keeps
+working with a v1.4.0 server, and shows the new exercises it doesn't know yet without losing them.
+
+**The new exercise database**
+
+- **5,632 exercises instead of 1,324**: bands and kettlebells, suspension trainers and landmines,
+  machines of every kind, plus stretching, mobility, yoga and pilates. Each one with a short
+  description, steps, body part, equipment and muscles, and its name in every app language
+  (German names for the new exercises are machine-made and waiting for a review).
+- **New animations**, licensed from Gym visual: sharp 360 px loops inside the app, 180 px on the
+  web and on your own server, and a still for every exercise.
+- **Male or female drawings**: about 940 exercises are drawn on both figures. Settings, Look,
+  "Exercise drawings" picks which one you see. Only the picture changes, never your data.
+- **A type filter** in the library: strength, calisthenics, olympic, stretching, mobility, yoga
+  and more.
+- **Search rebuilt** (#192): best matches first, typos forgiven ("sqat", "dumbel curl"), gym
+  shorthand understood ("db", "rdl", "ohp"), plurals too ("pull ups"), and "Similar exercises"
+  under the results, so a search almost never ends on nothing.
+- **Swap suggests the same muscle first** (#473), same equipment at the top.
+- **The catalogue lives in the repository**, one file per exercise, open to fixes and translations
+  by pull request (`catalogue/README.md`). "Suggest a fix for this exercise" in the app opens an
+  issue for that one exercise.
+
+**Training**
+
+- **Sets to failure**: mark any set as taken to failure from its set menu and it gets a little
+  purple "F". It counts as RIR 0 in your effort stats and the fatigue map (unless you rated it
+  yourself) and stays a normal work set for volume and records. "Last set to failure" in an
+  exercise's settings plans the final set as an all-out one.
+- **Triple progression** (#179): reps climb to the top of the range, then a set is added, up to
+  the most sets you allow; when every set sits at the top, the weight goes up and you start over.
+- **Back-off sets** (dennismstfc, #475): every set one step lighter than the one before.
+- **Per dumbbell or both together** (#474): say what a dumbbell weight means, and volume and
+  records count it right. Your old entries stay as you typed them.
+- **Your dumbbell rack** (#376): list the dumbbells you own, and progression, deloads, warm-ups and
+  the + and − buttons only land on those.
+- **Treadmill incline**: an incline in % next to speed on walking, running and stair machines.
+- **A fairer fatigue map** (sg41, #436): counted in hard sets with its own recovery time per
+  muscle, so a split no longer looks fatigued forever.
+- **Pyramid sets with a weight per set** (akram1089, #446, #445), **1RM from seven formulas** with
+  your pick of one (giulioleuci, #195, #155), **per-set progress lines** (iamtechnoana, #450, #145).
+
+**During a workout**
+
+- **Exercise chips** (#323): a numbered dot per exercise at the top, filled as you go. Tap one to
+  jump there.
+- **Collapse completed exercises** (helgehelge123, #241; Discord): in the list view a finished
+  exercise folds into one line the moment you tick its last set, and a tap opens it again. Turn it
+  on for good in Settings, Workout.
+- **Focus view** (giulioleuci, #222): one exercise at a time, nothing else on screen.
+- **Pick your rest-end sound** (#306): chime, classic, bell, beep-beep, whistle or soft, with a
+  preview, on Android with the screen off too.
+- **Superset names and their own rest** after each round.
+
+**After a workout and around it**
+
+- **Last time and next time** on the finish screen (#324): up, same or down, and what's next.
+- **Share a workout as an image** (anihothur, #455, #453).
+- **Export to Garmin** (#447): any finished workout as a .fit file, sets included.
+- **Body measurements** (robertgeica, #82): waist, arms, body fat and anything else, each with its
+  own curve.
+- **A note for a missed day** (#261): sick, travelling, injured or your own words. The missed-day
+  reminder leaves that day alone.
+- **Health Connect on Android** (DrDamnation, #371, #200): finished workouts and weigh-ins go to
+  Health Connect.
+
+**Equipment and languages**
+
+- **Bench and pull-up bar** as equipment (pawell67, #464), starter plans fitted to your equipment
+  (#469), **clubbell and macebell** (akram1089, #425).
+- 🇧🇩 **Bengali** (mrjohndoel, #465), **Polish exercise names** and a full Polish review
+  (pawell67, #467), French says tu and Russian says вы throughout (kurktchiev, #413, #414), plainer
+  Turkish (iamtechnoana, #451).
+
+**Coach**
+
+- The Coach sticks to your equipment and never sneaks in a machine you don't have.
+- A follow-up question in the chat no longer comes back as "something the app couldn't use" (#471).
+- Extra headers and an adjustable output limit for OpenAI-compatible endpoints (janviernine, #386;
+  danifuuu, #390), bases that carry their own version (iamtechnoana, #449, #437), consent and intake
+  in your language (kurktchiev, #415).
+
+**The app and your server**
+
+- **Cloudflare Access** (EthanetXYZ, #439): pair with a server behind Zero Trust using a service
+  token, which only ever goes to that one server.
+- Plain `http://` servers at home can be paired (#428); the "not connected" line is gone on a phone
+  kept local and can be closed by a guest (anshuman83-40, #462, #454).
+- **The web image runs without root** (mvanhorn, #466). Kubernetes and Helm now use port 8080.
+- **Self-hosting got simpler**: the exercise media ship inside the web image, nothing is downloaded
+  on first start. An old `media` service or folder is no longer used and can go.
+- **Helm chart** (aphisitworachorch, #418), **Nix flake and NixOS module** (gerrydoro, #452), push
+  to private addresses with `ALLOWED_PRIVATE_IPS` (ViktorShapoval, #448).
+
+**Fixes**
+
+- In the Android app the exercise animations play by themselves (they sat on their first frame),
+  and the rest-end tone plays with the screen off on phones that refused it before.
+- Warm-ups: unilateral ones count (sgoendoer, #388), a barbell warm-up is never lighter than the
+  bar (#409), editing one leaves the rest of the ramp alone (#442).
+- Superset Move up/down stays inside the superset (#443), swipes land where they should (#457),
+  zero added weight stays editable (ac1982, #461), Apple Health imports read each record's unit
+  (ac1982, #432), plate targets stay loadable (ac1982, #433), big media exports stay importable
+  (agammann, #430), the rest bar keeps its scale (aitordiaz, #423), a failed Sign out says what
+  failed (#456), and a re-import from Strong or Hevy no longer splits one exercise into two.
+- Many small fixes from kurktchiev (#401 to #410, #412).
+
+**Licence**
+
+The exercise stills and animations are © Aliaksandr Makatserchyk, Gym visual, licensed for use in
+openGym only and not covered by the AGPL. Details in NOTICE.md.
+
+## v1.3.10 (2026-10-07)
+
+This one grew. The plan was a queue and a rotation; along the way the whole app got a calmer look,
+swipe actions arrived, you can pick any accent colour you like, and sync was taken apart and put
+back together so that no device can quietly lose your training again. Thirty-five community pull
+requests from twelve contributors, fifteen issues closed, and a long night of testing behind it.
+Web bundle, APK and API image.
+
+**Please update the app on every device that syncs** (phone, browser tabs, the Android app). An
+older phone keeps working, but only a fully updated set of devices gets all of the new safety
+nets. Before you update, open each device once with internet so everything it owes the server has
+arrived.
+
+**A new design**
+
+- **Settings on one screen**, with search at the top, your account on a card, and everything else
+  on sub-pages: Workout, Reminders, Units & language, Data & backup and friends. Nothing was taken
+  away, it just has a home now. Type "rest", "swipe" or "vibrate" and you are there.
+- **Plan is two tabs, Schedule and Routines.** One switch between a fixed week and a rotation, a
+  menu for export, print, import and starter plans, and the weekly muscle volume moved to Stats.
+- **A workout screen that gets out of your way.** The tab bar steps aside while you train, a
+  labelled Finish, grouped ⋯ menus, a small thumbnail of the exercise, and the rest timer docked
+  as one row at the bottom. Tap its clock to set the time left.
+- **A rest-time wheel**, iPhone style, for anything from 0:00 to 15:00, in Settings, in the new
+  in-workout settings sheet and per exercise. Done without scrolling leaves your rest alone.
+- **The in-workout settings sheet**: rest timer, sound, vibrate, flash, screen awake, layout and
+  effort without leaving the session.
+- **Finish opens a small sheet**: finish and save, or discard. And any set's menu can turn it into
+  a warm-up set on the spot (or back).
+- **One icon per idea.** The shuffle icon used to mean twelve different things. Not any more.
+- New profiles start with smaller exercise animations and "weigh in before workouts" off. Your
+  existing profile keeps whatever you had.
+
+**Rotation and the session queue**
+
+- **A rotation beside the fixed week** (#158, #69; kurktchiev's #167 and giulioleuci's kurktchiev/openGym#1).
+  A, B, C, A, ...: the next session is the next one you haven't done, whatever the weekday, so a
+  missed Tuesday no longer shoves the plan around. Build the loop in Plan, reorder it, start a new
+  pass whenever you like. Switching back to a fixed week asks first and leaves your weekdays as
+  they were.
+- Home shows what is next, how much of the pass is done, and when the next one starts. A coach
+  app that writes your week through the API is marked "Externally managed".
+- **Planned vs completed weekly volume per muscle** (EmilZapata, #333, #327), now on Stats, with
+  each queue or rotation session counted once.
+
+**Swipe actions**
+
+- **Swipe a set** left to delete it, with Undo, or right to copy it. In cards, list and compact,
+  mirrored in Arabic. The last set stays put ("Keep at least one set, champ"). A timed per-side
+  hold slides its left and right rows together.
+- **Swipe in Plan**: a routine left to delete (with Undo), right to duplicate; an exercise out of
+  the routine editor or a routine out of the loop, with Undo too.
+- One switch for all of it, "Swipe actions" (Settings → Workout → Fine-tuning, or the in-workout
+  settings sheet), on by default.
+
+**Your own colour**
+
+- **Any accent colour you like**, from the rainbow swatch after the presets. openGym checks it
+  against light and dark and nudges it until text on it stays readable. It syncs like the presets.
+
+**Safer sync, and no more lost data**
+
+This is the part we are proudest of, and the part you will hopefully never notice. Most of these
+could already happen in v1.3.9:
+
+- **Every change carries its own stamp**, down to a single setting, plan day or routine field. Two
+  devices editing the same routine now merge field by field instead of one copy winning whole.
+- **A phone whose clock runs late** no longer loses its edits and deletions.
+- **A deletion stays deleted**, even when another device changes something unrelated afterwards,
+  and the order of your routines survives a conflict.
+- **Two tabs in one browser** no longer overwrite each other or the running workout, and signing
+  out or switching accounts with a second tab open leaves nothing behind.
+- **Signing out during a workout** no longer deletes it, and signing in with a guest plan asks
+  first. Anything that does not fit lands under Settings as kept changes, with "Save as a backup
+  file", instead of disappearing.
+- **A server that falls back** to an older copy (say, from a backup) is merged with, not trusted
+  blindly. A full disk or a slow answer can no longer hand a device an old state.
+- **Importing a backup keeps the workout you are in the middle of**, whether it replaces or merges.
+- On the server: every write is flushed to disk before openGym says "saved", a copy of the last
+  good `db.json` is kept as `db.json.bak`, and the server starts from that copy if the main file
+  is damaged. We killed it eighty times mid-write; every confirmed save was on disk.
+
+**Reminders and alerts**
+
+- **The missed-workout nudge** (opt-in): one push on the evening of a planned day you skipped, in
+  the tone you pick: Friendly, Guilt trip or Drill sergeant. It backs off after three missed days
+  in a row and never bothers you on a rest day.
+- **Vibrate on silent too** (noname-nan, #375), Android: the end of a rest or a hold buzzes like
+  an alarm even when the phone is on silent. Off by default.
+- The rest alarm on Android rings even when the notification permission dialog is still open, and
+  a killed app brings its rest bar and countdown back.
+- **"Rest over" rings only the device that rested** (kurktchiev, #348).
+- **Classic beeps** (tomlongfield, #372): the quieter three-beep sound from before 1.3.9 is back as
+  a choice.
+
+**More in the workout and history**
+
+- **Repeat today** (Space-Hermes, #58): open a past workout in History and start it again today.
+- **Pyramid sets** (NtsCiccio, #367, #362): one rep target per set (12 · 8 · 6 · Max), a rest per
+  set, and a "Max reps" chart in Stats.
+- **Per side on timed holds** (horusglez, #322): left and right each run the full hold, with a
+  10-second "switch sides" pause in between.
+- **Progress photos** (horusglez, #361): every photo kept with a workout on one timeline, with a
+  before/after slider.
+- **Update routine from the session** (FranciscoFavela, #336): copy an exercise's warm-ups, rest and
+  note back into its routine.
+- **"Last time" in days, weeks or months** (xwr3, #363) instead of a date. Hover for the full one.
+- **Pick your own backup folder** on Android (#161), for example a sync app's folder.
+
+**Community pull requests**
+
+Thank you, all of you. This release is half yours.
+
+- **@kurktchiev**: the session queue (#167), × to clear search (#338), the Coach card in the admin (#341), the workout menu's screen-reader label (#343),
+  check-in edits on a removed card (#344), the API under `BASE_PATH` (#346), rating a superset set
+  scrolls to the partner (#347), "rest over" on one device (#348), imported sessions graded on all
+  sets (#349), hardened importers (#350), Coach messages in your language (#351), Coach consent
+  that names notes (#352), the muscle chip keeps the equipment filter (#353), the plate load kind
+  is kept (#354), MCP tools that answer the question asked (#355) and explain a broken data folder
+  (#356), plus tests and tidying (#337, #339, #340, #342).
+- **@giulioleuci**: rotation mode, on top of the queue (kurktchiev/openGym#1).
+- **@EmilZapata**: planned vs completed weekly volume (#333) and zero-credit muscle mappings (#359).
+- **@horusglez**: per side on timed holds (#322) and progress photos (#361).
+- **@NtsCiccio**: pyramid sets (#367).
+- **@FranciscoFavela**: update routine from the session (#336).
+- **@dima-po**: three-form plurals for Russian (#365), and a steadier media test (#366).
+- **@nauish**: Traditional Chinese, a whole new language (#368).
+- **@tomlongfield**: the classic timer sound (#372).
+- **@alessandromoretti90**: a workout finished hours later ends at its last set (#317).
+- **@olivierbbommel**: Safari no longer turns 62.5 into 6265.5 (#320), and Finish stops a running
+  plank timer (#321).
+- **@tfdmendes**: neatly aligned routine cards on desktop (#374).
+
+**Bug fixes**
+
+- Custom exercises can be edited and deleted again, including older ones and ones from a shared
+  or Coach plan (Teo230, #358; svillar, #378).
+- The up and down arrows move an exercise within a superset, and out of it at the edge (svillar,
+  #377).
+- Strong's current export, the one with semicolons, imports again (davidjorgensen, #394).
+- Pairing the phone app says why it failed: a proxy or CORS rule in the way, a login page answering
+  in openGym's place, or a server that can't be reached (#329).
+- A cardio block or a long hold at the end no longer shortens the workout's duration.
+- 8.5 in a reps field no longer becomes 85, a running plank survives a reload, and the rest timer
+  stops when you sign out.
+- Loading the same starter plan twice no longer doubles your routines; a custom exercise can share
+  a name with a catalogue one; an equipment profile no longer hides imported custom exercises.
+- Plates: a single stack counts each pair properly.
+- Imports refuse impossible dates and numbers (year 9999, negative, 1e308 kg), a Hevy session over
+  midnight keeps its length, a zip's photos upload straight away, and the summary says how many
+  rows it skipped.
+- Workouts dated later today are no longer in the future, durations and body weight have sane
+  limits, and the weight axis never says "-0".
+- Passkey, pairing and import errors speak your language instead of developer English.
+- Polish and Ukrainian plurals are right everywhere (#365), "Drop {0}" means a drop set in every
+  language, and long labels no longer get cut off in Russian, Portuguese, Hungarian or German.
+- Android: status bar icons readable in the light theme, Back works after "All settings" and from
+  the Start menu, and no tab bar on the very first screen.
+- Without an account, nobody can flood the admin log with junk sign-ins or fill the server with
+  pairing codes.
+
+**For self-hosters**
+
+- **`FIRST_USER_ADMIN=1`** (seals187, #328), opt-in: the first profile on an empty instance becomes
+  its admin. Off by default; if you turn it on, register yourself before you share the address.
+- **`BASE_PATH`** (#346): serve openGym under a sub-path such as `/gym`. The web container checks
+  the value at start-up.
+- **Phone app and CORS** (#329): a new section in [SELF_HOSTING.md](docs/SELF_HOSTING.md) on proxies
+  that answer or change the CORS preflight (Traefik `headers` middleware, a second
+  `Access-Control-Allow-Origin`, SSO in front of `/api/`), with a one-line `curl` check. openGym
+  handles CORS itself, so leave it alone on the openGym route.
+- **Show connection status** (seals187, #330; xwr3, #369): Settings → Look & Home can hide the
+  sync line at the top. A dot on Home still warns when sync is stuck.
+- **Durable writes**: every file the API keeps is flushed before it is renamed into place, and
+  `./data/db.json.bak` holds a copy of the last good `db.json`. Back up `./data` as before.
+- If you build your own API image from a copy of the Dockerfile: it now also needs `queue.js`,
+  `nudge.js`, `nudge-copy.js`, `durable.js` and `sync-stamps.js`.
+- `PASSWORD_LOGIN` is unchanged and still off by default.
+- `build-api-docs --check` runs in CI (#342).
+
+**Known limit while old phones are around**
+
+The server stamps what a v1.3.9 phone sends, so most things just work. Until every device is
+updated, though, an old phone can't always say what it has seen: if it sets something back to
+exactly what it was before, after another device changed it, the other device's change loses.
+Workouts that v1.3.9 deleted offline and never uploaded may come back once; delete them again and
+they stay gone. Anything the update had to set aside is under Settings as "This device, before the
+update". Once everything is on 1.3.10, none of this applies.
+
+**Languages**
+
+- 🇹🇼 **Traditional Chinese** (nauish, #368): eighteen languages now. Browsers set to zh-Hant,
+  zh-HK or zh-MO open in it.
+- Every string reworded to sound more human, with fewer long dashes and a bit more fun.
+
 ## v1.3.9 — 2026-09-28
 
 The milestone was "edit your history", and it is in: fix a saved workout after the fact, move it to

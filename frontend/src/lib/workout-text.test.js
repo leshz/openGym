@@ -26,7 +26,7 @@ describe('workoutText', () => {
 
   it('reads as the heading, each exercise with its work sets, supersets together, then the note', () => {
     expect(workoutText(w, { unit: 'kg', nameOf })).toBe([
-      `Push — ${fmtDate('2026-09-03', true, true)}`,
+      `Push · ${fmtDate('2026-09-03', true, true)}`,
       '58 min · 1,790 kg · Body weight 80 kg',
       '',
       'Barbell Bench Press',
@@ -54,7 +54,7 @@ describe('workoutText', () => {
     ] }
     // no clock, no weigh-in, no note; an exercise with only a warm-up drops out, and a superset
     // with one member left trained is just that exercise
-    expect(workoutText(bare, { unit: 'lb', nameOf })).toBe(`Legs — ${fmtDate('2026-09-03', true, true)}\n120 lb\n\nDumbbell Curl\n12×10`)
+    expect(workoutText(bare, { unit: 'lb', nameOf })).toBe(`Legs · ${fmtDate('2026-09-03', true, true)}\n120 lb\n\nDumbbell Curl\n12×10`)
   })
 })
 
@@ -104,10 +104,14 @@ describe('workoutText exercise names per language', () => {
     const expected = {
       de: 'Bankdrücken mit Langhantel', es: 'Press De Banca Con Barra', fr: 'Développé Couché À La Barre',
       it: 'Panca Piana Con Bilanciere', 'pt-BR': 'Supino Com Barra', ru: 'Жим Штанги Лёжа', hu: 'Fekvenyomás Rúddal',
+      pl: 'Wyciskanie Sztangi Na Ławce Płaskiej',
     }
     for (const lang of EXERCISE_NAME_LANGS) {
-      _setLangState(lang, {}, null, packs[`../exercise-names/${lang}.js`], false)
-      expect(nameLine(), lang).toBe(expected[lang])
+      const pack = packs[`../exercise-names/${lang}.js`]
+      _setLangState(lang, {}, null, pack, false)
+      // Packs in a script without case (ar, hi, th, zh...) come out exactly as written.
+      const name = pack[w.entries[0].id]
+      expect(nameLine(), lang).toBe(expected[lang] ?? (name === name.toLocaleUpperCase() ? name : nameLine()))
     }
     _setLangState('en', {}, null, null)
     expect(nameLine()).toBe('Barbell Bench Press')

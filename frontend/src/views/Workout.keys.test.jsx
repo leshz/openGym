@@ -9,7 +9,7 @@ import Workout from './Workout.jsx'
 import { DEF, useStore } from '../store/useStore.js'
 import { useUI } from '../store/useUI.js'
 
-vi.mock('../lib/sound.js', () => ({ beep: vi.fn(), chime: vi.fn(), vibrate: vi.fn(), unlock: vi.fn() }))
+vi.mock('../lib/sound.js', () => ({ beep: vi.fn(), chime: vi.fn(), vibrate: vi.fn(), alertBuzz: vi.fn(), unlock: vi.fn() }))
 vi.mock('../lib/api.js', () => ({ api: vi.fn(() => Promise.resolve({})), appBase: () => '/' }))
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -68,6 +68,14 @@ describe('workout keys (issue #133)', () => {
     expect(useUI.getState().timer).not.toBeNull()
     press('Enter')
     expect(doneOf(0)).toEqual([true, true, true])
+  })
+
+  it('Space and Enter tick Focus sets through the same handler', () => {
+    renderWorkout([entry('1001', [false, false])], 0, { workoutView: 'focus' })
+    expect(container.querySelector('[data-testid="focus-view"]')).toBeTruthy()
+    press(' ')
+    press('Enter')
+    expect(doneOf(0)).toEqual([true, true])
   })
 
   it('once the exercise on screen is finished, a press brings up the next one and the next press ticks it', () => {

@@ -16,24 +16,29 @@ import { t } from '../lib/i18n.js'
 import { DAYN } from '../lib/format.js'
 import { EXDB } from '../lib/exercises.js'
 import { emptyCoach, coachAvailable, hasConsent, CONSENT_VERSION, CATEGORY_TEXT, appendChat } from '../lib/coach.js'
-import { requestPlan, disclosure } from '../lib/coach-api.js'
+import { requestPlan, disclosure, JOB_ERRORS } from '../lib/coach-api.js'
 import { DEMO } from '../lib/demo.js'
 import { MOBILE } from '../lib/mobile.js'
+import { activeProfile } from '../lib/equipment.js'
 import Icon from '../components/Icon.jsx'
 import { Button, TextArea } from '../components/ui.jsx'
 import '../coach.css'
 
+// Each choice's text returns [title, detail] in the current language, through literal t() calls
+// so check-source-strings sees every key, as CATEGORY_TEXT in lib/coach.js does. When the screen
+// passed these to t() as variables the checker could not see them, and the eight details had no
+// translation in any pack.
 const GOALS = [
-  ['strength', 'Get stronger', 'Heavier lifts, lower reps.', 'barbell'],
-  ['muscle', 'Build muscle', 'Volume and progression.', 'arm'],
-  ['general', 'General fitness', 'Balanced, sustainable training.', 'heart'],
-  ['fatloss', 'Lose fat', 'Keep strength while leaning out.', 'flame'],
-  ['endurance', 'Endurance', 'Higher reps, less rest, cardio.', 'figureRun']
+  ['strength', () => [t('Get stronger'), t('Heavier lifts, lower reps.')], 'barbell'],
+  ['muscle', () => [t('Build muscle'), t('Volume and progression.')], 'arm'],
+  ['general', () => [t('General fitness'), t('Balanced, sustainable training.')], 'heart'],
+  ['fatloss', () => [t('Lose fat'), t('Keep strength while leaning out.')], 'flame'],
+  ['endurance', () => [t('Endurance'), t('Higher reps, less rest, cardio.')], 'figureRun']
 ]
 const EXPERIENCE = [
-  ['new', 'New to lifting', 'First months in the gym.', 'sparkles'],
-  ['returning', 'Coming back after a break', 'You know the movements; the numbers need rebuilding.', 'reset'],
-  ['regular', 'Training regularly', 'Consistent for a while now.', 'trophy']
+  ['new', () => [t('New to lifting'), t('First months in the gym.')], 'sparkles'],
+  ['returning', () => [t('Coming back after a break'), t('You know the movements; the numbers need rebuilding.')], 'reset'],
+  ['regular', () => [t('Training regularly'), t('Consistent for a while now.')], 'trophy']
 ]
 
 // Equipment options come from the library's own taxonomy, most common first, so every choice
@@ -59,12 +64,17 @@ export default function CoachIntake() {
   const update = useStore(s => s.update)
   const toast = useUI(s => s.toast)
   const [needConsent] = useState(() => !editing && !hasConsent(S))
-  const STEPS = [...(needConsent ? ['consent'] : []), 'goal', 'experience', 'days', 'length', 'equipment', 'limits', 'extras']
+  // An athlete who already answered the intake and only lacks the CURRENT consent (the wording
+  // changed and CONSENT_VERSION moved) reads the new terms and goes back to the Coach. Without
+  // this the redirect from the chat replayed all seven questions and ended in a new plan request.
+  const [reconsentOnly] = useState(() => !editing && !hasConsent(S) && !!S.coach?.profile)
+  const STEPS = reconsentOnly ? ['consent'] : [...(needConsent ? ['consent'] : []), 'goal', 'experience', 'days', 'length', 'equipment', 'limits', 'extras']
   const [step, setStep] = useState(0)
   const [busy, setBusy] = useState(false)
   const [p, setP] = useState(() => ({
     goal: null, experience: null, daysPerWeek: 3, preferredDays: [1, 3, 5],
-    sessionMin: 60, equipment: [], limitations: '', likes: '', dislikes: '', notes: '',
+    // A home gym already set up under Settings → Equipment is the best first guess here.
+    sessionMin: 60, equipment: (activeProfile(S)?.equipment || []).filter(e => EQUIPMENT.includes(e)), limitations: '', likes: '', dislikes: '', notes: '',
     ...(S.coach?.profile || {})
   }))
   const set = patch => setP(v => ({ ...v, ...patch }))
@@ -81,7 +91,8 @@ export default function CoachIntake() {
 
   const agree = () => {
     update(s => { s.coach = { ...(s.coach || emptyCoach()), consent: { agreedAt: new Date().toISOString(), version: CONSENT_VERSION } } })
-    setStep(step + 1)
+    if (reconsentOnly) nav('/coach', { replace: true })
+    else setStep(step + 1)
   }
 
   const finish = async () => {
@@ -102,7 +113,10 @@ export default function CoachIntake() {
     try {
       await requestPlan(profile)
       nav('/coach', { replace: true })
-    } catch (e) { toast(e.message || t('Could not ask the Coach')); setBusy(false) }
+    } catch (e) {
+      // The server's refusal is English with its class beside it; the class picks the line.
+      toast(JOB_ERRORS[e.data?.code] || e.message || t('Could not ask the Coach')); setBusy(false)
+    }
   }
 
   const toggleDay = d => set({
@@ -132,7 +146,7 @@ export default function CoachIntake() {
         <h1 className="ob-h">{t('What are you training for?')}</h1>
         <p className="ob-p">{t('The Coach builds the whole plan around this.')}</p>
         <div className="ob-choices">
-          {GOALS.map(([v, label, sub, icon]) => <Choice key={v} on={p.goal === v} icon={icon} title={t(label)} sub={t(sub)} onClick={() => set({ goal: v })} />)}
+          {GOALS.map(([v, text, icon]) => { const [title, sub] = text(); return <Choice key={v} on={p.goal === v} icon={icon} title={title} sub={sub} onClick={() => set({ goal: v })} /> })}
         </div>
       </>}
 
@@ -141,7 +155,7 @@ export default function CoachIntake() {
         <h1 className="ob-h">{t('Where are you starting from?')}</h1>
         <p className="ob-p">{t('Sets the pace of progression, and how much the Coach assumes you know.')}</p>
         <div className="ob-choices">
-          {EXPERIENCE.map(([v, label, sub, icon]) => <Choice key={v} on={p.experience === v} icon={icon} title={t(label)} sub={t(sub)} onClick={() => set({ experience: v })} />)}
+          {EXPERIENCE.map(([v, text, icon]) => { const [title, sub] = text(); return <Choice key={v} on={p.experience === v} icon={icon} title={title} sub={sub} onClick={() => set({ experience: v })} /> })}
         </div>
       </>}
 
@@ -196,9 +210,9 @@ export default function CoachIntake() {
         <p className="ob-p">{t('Injuries, joints that complain, movements you cannot do, or practical limits like training at 6am in a flat.')}</p>
         <div className="ob-field">
           <TextArea rows={4} maxLength={600} value={p.limitations} onChange={e => set({ limitations: e.target.value })}
-            placeholder={t('e.g. “dodgy left shoulder — no barbell overhead press”')} />
+            placeholder={t('e.g. “dodgy left shoulder, no barbell overhead press”')} />
         </div>
-        <div className="ob-note warn">{t('If something actually hurts, see a professional — the Coach will program conservatively but it cannot diagnose anything.')}</div>
+        <div className="ob-note warn">{t('If something actually hurts, see a professional. The Coach will program conservatively, but it can’t diagnose anything.')}</div>
       </>}
 
       {key === 'extras' && <>
@@ -238,7 +252,7 @@ function Consent({ onAgree, onDecline }) {
   const [info, setInfo] = useState(null)
   useEffect(() => { disclosure().then(setInfo).catch(() => {}) }, [])
   const who = info?.payer === 'you'
-    ? t('Sent straight to {0} with your own API key — you pay for every request.', info.host || info.providerLabel)
+    ? t('Sent straight to {0} with your own API key. You pay for every request.', info.host || info.providerLabel)
     : t('Sent to {0}, running on this server under the instance owner’s account.', info?.providerLabel || config?.coach?.providerLabel || t('the configured AI provider'))
   return <>
     <div className="ob-eyebrow">{t('Before we start')}</div>
@@ -247,8 +261,8 @@ function Consent({ onAgree, onDecline }) {
     <div className="ob-sub" style={{ marginTop: 0 }}>{t('What it reads')}</div>
     <div className="ob-consent">
       {(info?.categories || Object.keys(CATEGORY_TEXT)).map(k => {
-        const [title, sub] = CATEGORY_TEXT[k] || [k, '']
-        return <div key={k} className="ob-consent-row"><Icon name="check" /><div><b>{t(title)}</b><span>{t(sub)}</span></div></div>
+        const [title, sub] = CATEGORY_TEXT[k]?.() || [k, '']
+        return <div key={k} className="ob-consent-row"><Icon name="check" /><div><b>{title}</b><span>{sub}</span></div></div>
       })}
     </div>
     <div className="ob-fine">
@@ -257,7 +271,7 @@ function Consent({ onAgree, onDecline }) {
       <div style={{ color: 'var(--yellow)' }}>{t('The Coach is not a doctor or a physiotherapist. If something hurts, ask a professional.')}</div>
     </div>
     <div className="ob-foot" style={{ flexDirection: 'column' }}>
-      <Button variant="primary" onClick={onAgree}>{t('I understand — let’s go')}</Button>
+      <Button variant="primary" onClick={onAgree}>{t('I understand, let’s go')}</Button>
       <Button onClick={onDecline}>{t('Not now')}</Button>
     </div>
   </>

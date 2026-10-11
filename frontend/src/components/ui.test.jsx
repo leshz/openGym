@@ -114,9 +114,9 @@ describe('Slider under dir=rtl', () => {
 
 describe('Stepper', () => {
   // controlled like every real caller: the parent re-renders with the new value
-  function Host({ initial, onChange, step }) {
+  function Host({ initial, onChange, step, ...props }) {
     const [v, setV] = React.useState(initial)
-    return <Stepper value={v} step={step} onChange={n => { setV(n); onChange(n) }} />
+    return <Stepper value={v} step={step} onChange={n => { setV(n); onChange(n) }} {...props} />
   }
   const mountStepper = (value, onChange, step = 1) => {
     act(() => root.render(<Host initial={value} step={step} onChange={onChange} />))
@@ -186,6 +186,32 @@ describe('Stepper', () => {
     act(() => plus.click())
     expect(onChange).toHaveBeenCalledWith(11)
   })
+
+  it('names controls for their field when requested', () => {
+    const onChange = vi.fn()
+    act(() => root.render(<Host initial={10} step={1} onChange={onChange} ariaLabel="load" />))
+    expect(host.querySelector('button[aria-label="Decrease load"]')).toBeTruthy()
+    expect(host.querySelector('button[aria-label="Increase load"]')).toBeTruthy()
+  })
+
+  it('uses the caller step rule', () => {
+    const onChange = vi.fn()
+    act(() => root.render(<Host initial={61.3} step={2.5} onChange={onChange}
+      onStep={(value, increment, direction) => value + increment * 10 + direction} />))
+    act(() => host.querySelector('button[aria-label="Increase"]').click())
+    expect(onChange).toHaveBeenCalledWith(87.3)
+  })
+
+  it('disables all editing controls', () => {
+    const onChange = vi.fn()
+    act(() => root.render(<Host initial={61.3} step={2.5} onChange={onChange} disabled />))
+    const [minus, plus] = host.querySelectorAll('button')
+    expect(minus.disabled).toBe(true)
+    expect(plus.disabled).toBe(true)
+    expect(host.querySelector('input').disabled).toBe(true)
+    act(() => plus.click())
+    expect(onChange).not.toHaveBeenCalled()
+  })
 })
 
 describe('NumberField fit', () => {
@@ -223,5 +249,67 @@ describe('NumberField fit', () => {
 
     act(() => root.render(<Harness fit={false} />))
     expect(host.querySelector('input').style.width).toBe('')
+  })
+})
+
+describe('NumberField whole numbers', () => {
+  // Typed one key at a time, "8.5" in a reps field used to lose the "." on the second key and
+  // then read the 5 as a second digit: 85 reps.
+  it('takes 8.5 typed key by key as 8, not 85, and shows the whole number after blur', () => {
+    const changes = []
+    function Harness() {
+      const [v, setV] = useState(10)
+      return <NumberField decimal={false} value={v} onChange={n => { changes.push(n); setV(n) }} />
+    }
+    act(() => root.render(<Harness />))
+    const input = host.querySelector('input')
+    const type = value => act(() => {
+      Object.getOwnPropertyDescriptor(input.constructor.prototype, 'value').set.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    type('8'); type(input.value + '.'); type(input.value + '5')
+    expect(changes).toEqual([8, 8, 8])
+    expect(input.value).toBe('8.5')
+    act(() => input.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+    expect(input.value).toBe('8')
+    type('8,5')
+    expect(changes.at(-1)).toBe(8)
+  })
+})
+
+describe('NumberField select on tap', () => {
+  // In WebKit the release of the tap that focused the field moves the caret and drops the
+  // focus-time selection, so typing 65 over 62.5 read 6265.5. happy-dom cannot move a caret;
+  // what it can show is that the release of that first tap is kept from doing so.
+  const mouseup = el => {
+    const e = new MouseEvent('mouseup', { bubbles: true, cancelable: true })
+    act(() => el.dispatchEvent(e))
+    return e
+  }
+  const mount = () => {
+    act(() => root.render(<NumberField value={62.5} onChange={() => {}} />))
+    return host.querySelector('input')
+  }
+
+  it('keeps the selection through the release of the tap that focused it', () => {
+    const input = mount()
+    act(() => input.focus())
+    expect(input.selectionStart).toBe(0)
+    expect(input.selectionEnd).toBe(4)
+    expect(mouseup(input).defaultPrevented).toBe(true)
+  })
+
+  it('lets a later tap on the focused field place the caret', () => {
+    const input = mount()
+    act(() => input.focus())
+    mouseup(input)
+    expect(mouseup(input).defaultPrevented).toBe(false)
+  })
+
+  it('forgets the focus once the field is left', () => {
+    const input = mount()
+    act(() => input.focus())
+    act(() => input.blur())
+    expect(mouseup(input).defaultPrevented).toBe(false)
   })
 })

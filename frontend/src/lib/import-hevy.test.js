@@ -142,7 +142,8 @@ describe('parseHevyWorkouts', () => {
     expect(parsed.converted).toBe(true)
   })
 
-  it('merges two Hevy sessions on the same local day', () => {
+  // Two Hevy workouts on one day used to be merged into one (GitHub #505).
+  it('keeps two Hevy sessions on the same local day apart', () => {
     const a = { ...WORKOUT, id: 'a', title: 'AM', exercises: [WORKOUT.exercises[0]] }
     const b = {
       ...WORKOUT, id: 'b', title: 'PM',
@@ -151,8 +152,14 @@ describe('parseHevyWorkouts', () => {
       exercises: [WORKOUT.exercises[1]],
     }
     const parsed = parseHevyWorkouts([a, b], TEMPLATES, { unit: 'kg' })
-    expect(parsed.workouts).toHaveLength(1)
-    expect(parsed.workouts[0].entries.length).toBeGreaterThanOrEqual(2)
+    expect(parsed.workouts).toHaveLength(2)
+    expect(parsed.workouts.map(w => w.name)).toEqual(['AM', 'PM'])
+    expect(parsed.workouts[0].id).not.toBe(parsed.workouts[1].id)
+    // Both arrive once; the same payload again adds nothing.
+    const S = { workouts: [], customEx: [], exWeights: {}, bodyweight: [] }
+    expect(mergeImport(S, parsed).added).toBe(2)
+    expect(mergeImport(S, parsed).added).toBe(0)
+    expect(S.workouts).toHaveLength(2)
   })
 })
 
@@ -301,5 +308,15 @@ describe('buildHevyExerciseMap', () => {
     expect(map.get('4E5257DE')).toBe('2616')
     expect(map.get('DEADBEEF')).toBeNull()
     expect(map.size).toBe(TEMPLATES.length)
+  })
+})
+
+describe('parseHevyWorkouts past midnight', () => {
+  it('a session ending after midnight keeps its length', () => {
+    // Local-time ISO strings, so the test reads the same in every time zone.
+    const late = { ...WORKOUT, start_time: '2026-09-06T23:30:00', end_time: '2026-09-07T00:20:00' }
+    const [w] = parseHevyWorkouts([late], TEMPLATES, { unit: 'kg' }).workouts
+    expect(w.d).toBe('2026-09-06')
+    expect((w.end - w.start) / 60000).toBe(50)
   })
 })

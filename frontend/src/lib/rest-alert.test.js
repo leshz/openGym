@@ -5,11 +5,11 @@ describe('buildRestAlert', () => {
   const now = 1_700_000_000_000
 
   it('schedules a public notification', () => {
-    const alert = buildRestAlert({ at: now + 90_000, title: 'Rest over — next set!', sound: true, now })
+    const alert = buildRestAlert({ at: now + 90_000, title: 'Rest’s over. Next set!', sound: true, now })
     expect(alert).toMatchObject({
       id: REST_ALERT_ID,
       channelId: REST_CHANNEL_ID,
-      title: 'Rest over — next set!',
+      title: 'Rest’s over. Next set!',
       at: now + 90_000,
       allowWhileIdle: true,
       countdownTitle: 'Rest',
@@ -29,6 +29,23 @@ describe('buildRestAlert', () => {
 
   it('still schedules when sound is off', () => {
     expect(buildRestAlert({ at: now + 1000, sound: false, now }).sound).toBe(false)
+  })
+
+  // Discord "Rest Timer Sound Notification too Quiet": the locked phone played the old beeps
+  // whatever Settings → Sound said. The chime is the default; only `true` picks the classic beeps.
+  it('carries Settings → Sound to the native tone, chime by default', () => {
+    expect(buildRestAlert({ at: now + 1000, now }).classic).toBe(false)
+    expect(buildRestAlert({ at: now + 1000, classic: true, now }).classic).toBe(true)
+    expect(buildRestAlert({ at: now + 1000, classic: 'kind', now }).classic).toBe(false)
+  })
+
+  // #306: more sounds to pick from. `tone` names the one; `classic` stays for an older app shell.
+  it('names the picked sound for the native side, with classic set for the classic beeps only', () => {
+    expect(buildRestAlert({ at: now + 1000, now })).toMatchObject({ tone: 'chime', classic: false })
+    expect(buildRestAlert({ at: now + 1000, tone: 'bell', now })).toMatchObject({ tone: 'bell', classic: false })
+    expect(buildRestAlert({ at: now + 1000, tone: 'classic', now })).toMatchObject({ tone: 'classic', classic: true })
+    expect(buildRestAlert({ at: now + 1000, classic: true, now })).toMatchObject({ tone: 'classic', classic: true })
+    for (const junk of ['kazoo', 'constructor', 7]) expect(buildRestAlert({ at: now + 1000, tone: junk, now }).tone).toBe('chime')
   })
 
   // A channel keeps the vibration it was created with, so Vibrate off cannot switch 'rest-over'
